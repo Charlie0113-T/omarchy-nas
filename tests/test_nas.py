@@ -49,6 +49,12 @@ def udev(node="/dev/sdc2"):
     return patch.object(c.os.path, "realpath", side_effect=lambda path, *a, **k: node if path == BY_UUID else real_realpath(path, *a, **k))
 
 
+def node_exists(node, present):
+    # Model udev keeping or removing a device node, independent of the test host's /dev.
+    real = os.path.exists
+    return patch.object(c.os.path, "exists", side_effect=lambda path: present if path == node else real(path))
+
+
 class DetectionTests(unittest.TestCase):
     def test_internal_system_and_spare_sibling_are_excluded(self):
         rows = c.inventory(fixture())
@@ -261,8 +267,30 @@ class MountTests(unittest.TestCase):
         data = fixture(); data["blockdevices"][1]["children"][0].update(name="/dev/sdd2", **{"maj:min": "8:50"})
         dev = c.inventory(data)[-1]
         info = {"fstype": "fuse.omarchy-apfs", "source": "/dev/sdc2", "options": "ro,nosuid,nodev,noexec"}
-        with udev("/dev/sdd2"), patch.object(c, "mount_info", return_value=info), self.assertRaisesRegex(c.NasError, "FUSE"):
+        with udev("/dev/sdd2"), node_exists("/dev/sdc2", False), patch.object(c, "mount_info", return_value=info), self.assertRaises(c.NasError) as raised:
             c.verify_mount(config()["shares"][0], dev)
+        for part in ("陈旧挂载", "/dev/sdc2", "/dev/sdd2", "sudo omarchy-nas pause family 再 resume family"):
+            self.assertIn(part, str(raised.exception))
+        # Another live device mounted there is still a plain refusal, not a replug.
+        with udev("/dev/sdd2"), node_exists("/dev/sdc2", True), patch.object(c, "mount_info", return_value=info), self.assertRaisesRegex(c.NasError, "^FUSE 挂载源未能核实"):
+            c.verify_mount(config()["shares"][0], dev)
+
+    def test_ext4_replug_reports_stale_mount_with_remedy(self):
+        cfg = config("ext4", "rw")
+        data = fixture("ext4"); data["blockdevices"][1]["children"][0].update(name="/dev/sdd2", **{"maj:min": "8:50"})
+        devices = c.inventory(data)
+        info = {"fstype": "ext4", "source": "/dev/sdc2", "maj:min": "8:34", "options": "rw,nosuid,nodev,noexec"}
+        calls = []
+        with patch.object(c, "mount_info", return_value=info), patch.object(c, "load_config", return_value=cfg), \
+             patch.object(c, "inventory", return_value=devices), patch.object(c, "probe") as probe, \
+             patch.object(c, "run", side_effect=lambda args, **kw: calls.append(args)):
+            for exists, expected in ((False, "陈旧挂载"), (True, "挂载设备与登记设备不一致")):
+                for check in (lambda: c.ensure_mounted(cfg["shares"][0], cfg, devices), lambda: c.guard("family")):
+                    with self.subTest(exists=exists), node_exists("/dev/sdc2", exists), self.assertRaisesRegex(c.NasError, "^" + expected) as raised:
+                        check()
+                    self.assertEqual("pause family" in str(raised.exception), not exists)
+        probe.assert_not_called()
+        self.assertEqual(calls, [])
 
     def test_apfs_mount_command_uses_resolved_node(self):
         cfg = config(); dev = c.inventory(fixture())[-1]
@@ -358,12 +386,14 @@ class ServiceTests(unittest.TestCase):
             target=Path(tmp)/"real"; target.mkdir(); link=Path(tmp)/"link"; link.symlink_to(target)
             with patch.object(c.os,"geteuid",return_value=1000), self.assertRaises(c.NasError): c.secure_dir(link)
 
-    def test_smb_binds_only_home_ipv4_network(self):
+    def test_smb_binds_registered_interface_and_filters_sources(self):
+        # A CIDR token binds only the lowest local address in it, which may belong to another NIC.
         out = c.smb_config(config())
-        self.assertIn("interfaces = lo 192.168.1.0/24\n", out)
-        self.assertNotIn("interfaces = lo eth0", out)
-        self.assertIn("bind interfaces only = yes", out)
-        self.assertIn("hosts allow = 127.0.0.1 192.168.1.0/24", out)
+        self.assertIn("interfaces = lo eth0\n", out)
+        self.assertNotIn("interfaces = lo 192.168.1.0/24", out)
+        self.assertIn("bind interfaces only = yes\n", out)
+        self.assertIn("hosts allow = 127.0.0.1 192.168.1.0/24\n", out)
+        self.assertIn("hosts deny = ALL\n", out)
 
     def test_panel_unit_is_sandboxed_without_hiding_devices(self):
         panel = c.unit_files(config())["omarchy-nas-panel.service"]
@@ -395,12 +425,42 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual((saved["interface"], saved["network"]), ("wlan0", "192.168.0.0/24"))
             self.assertEqual(saved["shares"], cfg["shares"])
             smb = p.smb.read_text()
-            self.assertIn("interfaces = lo 192.168.0.0/24", smb)
+            self.assertIn("interfaces = lo wlan0\n", smb)
             self.assertIn("hosts allow = 127.0.0.1 192.168.0.0/24", smb)
             self.assertEqual(calls[0][0], "testparm")
             self.assertIn(["systemctl", "try-restart", c.SERVICE], calls)
             self.assertIn("gateway-init", out.getvalue()); self.assertIn("--replace", out.getvalue())
             self.assertIn("sudo ufw allow from 192.168.0.0/24 to 192.168.0.23 port 8789 proto tcp", out.getvalue())
+
+    def test_add_says_when_fd_pairing_does_not_cover_the_share(self):
+        cfg = config("ext4", "rw"); share = cfg["shares"][0]
+        old = {**{k: share[k] for k in ("name", "id_type", "id", "fs", "mode")}, "id": "old-apfs-uuid", "fs": "apfs", "mode": "ro"}
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(etc=Path(tmp)); gateway = p.etc / "gateway.json"
+            gateway.write_text(json.dumps({"shares": [old]}))
+            with patch.object(c, "P", p), patch.object(cli, "root"), patch.object(c, "load_config", return_value={**cfg, "shares": []}), \
+                 patch.object(cli, "selected_device"), patch.object(cli, "enroll", return_value=(cfg, share)), \
+                 patch.object(c, "locked", return_value=contextlib.nullcontext()), patch.object(c, "ensure_mounted"), patch.object(c, "inventory", return_value=[]), \
+                 patch.object(c, "write_smb"), patch.object(c, "save_config") as save, patch.object(cli, "service_active", return_value=False), \
+                 patch.object(c, "reconcile"), contextlib.redirect_stdout(io.StringIO()) as out:
+                cli.add(types.SimpleNamespace(claim_root=False))
+            save.assert_called_once_with(cfg)
+            self.assertEqual(json.loads(gateway.read_text()), {"shares": [old]})
+            hint = out.getvalue().splitlines()[-1]
+            for part in ("family", "另一个卷", "gateway-init", "--replace", "pairing.json"):
+                self.assertIn(part, hint)
+            same = {**old, "id": share["id"], "fs": "ext4", "mode": "rw"}
+            for paired, expected in (([], "还没有"), ([{**old, "name": "other"}], "还没有"), ([same], None), (["family"], None), (None, None)):
+                with self.subTest(paired=paired), patch.object(c, "P", p), contextlib.redirect_stdout(io.StringIO()) as out:
+                    if paired is None:
+                        gateway.unlink()
+                    else:
+                        gateway.write_text(json.dumps({"shares": paired}))
+                    cli.pairing_hint(share)
+                if expected:
+                    self.assertIn(expected, out.getvalue()); self.assertIn("--replace", out.getvalue())
+                else:
+                    self.assertEqual(out.getvalue(), "")
 
     def test_upgrade_reinstalls_without_touching_pairing_or_tls(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -450,10 +510,14 @@ class ServiceTests(unittest.TestCase):
             with patch.object(c, "P", p), patch.object(c, "inventory", return_value=[]), patch.object(c, "network_interfaces", return_value=[]):
                 self.assertNotIn("gateway_certificate", web.snapshot())
                 (p.etc / "gateway.json").write_text("{}")
-                with patch.object(c, "cert_expiry", return_value=time.time() + 9.5 * 86400) as expiry:
+                now = time.time()
+                expiries = {p.etc / "tls/server.crt": now + 9.5 * 86400, p.etc / "family-nas-ca.crt": now + 80.5 * 86400}
+                with patch.object(c, "cert_expiry", side_effect=expiries.__getitem__) as expiry:
                     snap = web.snapshot()
-            expiry.assert_called_once_with(p.etc / "tls/server.crt")
-            self.assertEqual(snap["gateway_certificate"]["days_left"], 9)
+            # The panel user cannot read the root-only tls/ca.crt; the public copy has the same certificate.
+            self.assertEqual([call.args[0] for call in expiry.call_args_list], list(expiries))
+            self.assertEqual(snap["gateway_certificate"], {"not_after": expiries[p.etc / "tls/server.crt"], "days_left": 9,
+                                                           "ca_not_after": expiries[p.etc / "family-nas-ca.crt"], "ca_days_left": 80})
 
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
     def test_certificate_expiry_is_read_from_the_certificate(self):
@@ -482,10 +546,13 @@ class HttpTests(unittest.TestCase):
         status,headers,data=self.request("/api/status")
         self.assertEqual(status,200); self.assertTrue(json.loads(data)["demo"])
         self.assertLess(json.loads(data)["gateway_certificate"]["days_left"],30)
+        self.assertGreater(json.loads(data)["gateway_certificate"]["ca_days_left"],90)
         for path in ("/","/app.js","/style.css"):
             status,headers,data=self.request(path)
             self.assertEqual(status,200); self.assertTrue(len(data)>100)
             self.assertIn("frame-ancestors 'none'",headers["Content-Security-Policy"])
+        self.assertIn(f'<span id="version">v{c.VERSION}</span>'.encode(),self.request("/")[2])
+        self.assertIn("ca_days_left",self.request("/app.js")[2].decode())
 
     def test_untrusted_host_is_denied(self):
         self.assertEqual(self.request("/api/status",headers={"Host":"evil.example"})[0],403)

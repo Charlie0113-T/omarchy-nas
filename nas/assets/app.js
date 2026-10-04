@@ -30,9 +30,15 @@ function render(data) {
   const cert = data.gateway_certificate, gateway = byId("gateway"); gateway.hidden = !cert;
   if (cert) {
     const soon = cert.days_left < 30, date = new Date(cert.not_after*1000).toLocaleDateString("zh-CN");
-    gateway.className = soon ? "notice" : "notice calm";
+    const caSoon = cert.ca_days_left < 90, caDate = new Date(cert.ca_not_after*1000).toLocaleDateString("zh-CN");
+    gateway.className = soon || caSoon ? "notice" : "notice calm";
     gateway.replaceChildren(el("span", "", !soon ? `FD 网关证书有效期至 ${date}（剩 ${cert.days_left} 天）。` : cert.days_left < 0 ? `FD 网关证书已于 ${date} 到期，FD 无法连接 NAS。续期不改配对。` : `FD 网关证书剩 ${cert.days_left} 天（${date} 到期），到期后 FD 无法连接 NAS。续期不改配对。`));
     if (soon) gateway.append(button("续期命令 ↗", ()=>command("续期网关证书", "用原 CA 只更换服务器证书并重启网关；家庭凭据和 pairing.json 不变，设备无需重新导入。", "sudo omarchy-nas gateway-renew")));
+    if (caSoon) {
+      const ca = el("div", "", cert.ca_days_left < 0 ? `家庭 CA 证书已于 ${caDate} 到期，所有设备都会拒绝 NAS 证书；续期无效，需轮换 CA。` : `家庭 CA 证书剩 ${cert.ca_days_left} 天（${caDate} 到期）。网关证书续期不能超过它；到期前需轮换 CA，并让每台设备重新信任新证书。`);
+      ca.append(button("轮换步骤 ↗", ()=>command("轮换家庭 CA", "先把旧 CA 改名保存（不删除）。然后在 FD 设置页复制 gateway-init 命令并加 --replace 运行，生成新 CA 与新配对；之后每台设备都要重新信任新的 family-nas-ca.crt，并导入新的 pairing.json。", "sudo mv -n /etc/omarchy-nas/tls/ca.key /etc/omarchy-nas/tls/ca.key.old-$(date +%Y%m%d) && sudo mv -n /etc/omarchy-nas/tls/ca.crt /etc/omarchy-nas/tls/ca.crt.old-$(date +%Y%m%d)")));
+      gateway.append(ca);
+    }
   }
   const shares = byId("shares"); shares.replaceChildren();
   if (!data.shares.length) { const empty = el("div", "empty"); empty.append(el("strong", "", "接入第一块数据盘"), el("p", "", "将 USB 硬盘柜接到主机，然后运行设置向导。选择磁盘、家庭网络和访问密码。"), button("查看设置命令 →", ()=>command("开始设置", "在下载文件的目录运行。向导会先显示具体设备和共享模式，再要求确认。", data.configured ? "sudo omarchy-nas add" : "python3 ~/Downloads/omarchy-nas.pyz setup"))); shares.append(empty); }

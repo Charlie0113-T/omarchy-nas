@@ -344,12 +344,18 @@ def verify_mount(share, device, p=P):
     expected_fs = {"apfs": {"fuse.omarchy-apfs"}, "ntfs": {"fuseblk", "fuse.ntfs-3g"}}.get(share["fs"], {share["fs"]})
     if info.get("fstype") not in expected_fs:
         raise NasError("实际挂载文件系统不匹配")
+    source, mismatch = info.get("source") or "", ""
     if share["fs"] in {"apfs", "ntfs"}:
-        source = info.get("source", "")
         if not source.startswith("/dev/") or os.path.realpath(source) != os.path.realpath(device["path"]):
-            raise NasError("FUSE 挂载源未能核实；拒绝共享")
+            mismatch = "FUSE 挂载源未能核实；拒绝共享"
     elif info.get("maj:min") != device["major_minor"]:
-        raise NasError("挂载设备与登记设备不一致")
+        mismatch = "挂载设备与登记设备不一致"
+    if mismatch:
+        # A replug leaves the old mount on its vanished node while the disk returns under a new one.
+        if source.startswith("/dev/") and not os.path.exists(source):
+            raise NasError(f"陈旧挂载：{share['name']} 的磁盘已断开后重新接入（挂载仍指向已消失的 {clean(source)}，当前为 {device['path']}）。"
+                           f"请先 sudo omarchy-nas pause {share['name']} 再 resume {share['name']}。")
+        raise NasError(mismatch)
     if share["mode"] not in opts or not {"nosuid", "nodev", "noexec"}.issubset(opts):
         raise NasError("实际挂载选项与共享策略不一致")
     return info
@@ -451,7 +457,7 @@ def smb_config(cfg, p=P):
     lines = ["# Managed by Omarchy NAS. Existing /etc/samba/smb.conf is untouched.", "[global]",
              "server role = standalone server", "security = user", "map to guest = Never",
              "server min protocol = SMB3_00", "smb encrypt = required", "smb ports = 445",
-             "disable netbios = yes", f"interfaces = lo {cfg['network']}", "bind interfaces only = yes",
+             "disable netbios = yes", f"interfaces = lo {cfg['interface']}", "bind interfaces only = yes",
              f"hosts allow = 127.0.0.1 {cfg['network']}", "hosts deny = ALL",
              "load printers = no", "printing = bsd", "printcap name = /dev/null", "disable spoolss = yes",
              f"private dir = {p.data}/private", f"state directory = {p.data}/state",

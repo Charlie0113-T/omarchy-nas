@@ -178,6 +178,23 @@ def write_units(cfg):
     c.run(["systemctl", "daemon-reload"])
 
 
+def pairing_hint(share):
+    # gateway.json binds each paired name to the volume identity seen at gateway-init time.
+    path = c.P.etc / "gateway.json"
+    if not path.exists():
+        return
+    try:
+        paired = json.loads(path.read_text()).get("shares", [])
+    except (OSError, ValueError, AttributeError):
+        paired = []
+    name = share["name"]
+    entry = next((s for s in paired if s == name or isinstance(s, dict) and s.get("name") == name), None)
+    if entry is None or isinstance(entry, dict) and any(entry.get(k) != share[k] for k in ("id_type", "id", "fs")):
+        print((f"注意：FD 文件网关的配对中还没有 {name}" if entry is None else
+               f"注意：FD 文件网关配对时的 {name} 是另一个卷（例如已重新格式化或更换磁盘）") +
+              "，FD 暂时无法使用它。请在 FD 设置页复制 gateway-init 命令，加 --replace 重新运行，再在各设备导入新的 pairing.json。")
+
+
 def setup(args):
     if os.geteuid() != 0:
         # Elevate only setup; the panel always runs as the desktop user.
@@ -235,6 +252,7 @@ def add(args):
         c.run(["systemctl", "reload", c.SERVICE])
     c.reconcile()
     print(f"已登记共享：{share['name']}")
+    pairing_hint(share)
 
 
 def disable_share(name, *, forget=False):
@@ -275,6 +293,7 @@ def enable_share(name):
         c.run(["systemctl", "reload", c.SERVICE])
     c.reconcile()
     print(f"已恢复：{name}")
+    pairing_hint(shares[0])
 
 
 def stop():
@@ -324,7 +343,7 @@ def renetwork(args):
         candidate = c.validate_config({**cfg, "interface": iface["name"], "network": iface["network"]})
         c.write_smb(candidate)
         c.save_config(candidate)
-    # Samba binds listening addresses at start; a reload would keep the old subnet.
+    # Samba binds listening addresses at start; a reload would keep the old interface.
     c.run(["systemctl", "try-restart", c.SERVICE], timeout=60)
     from .gateway_setup import firewall_note
     print(f"家庭网络：{cfg['interface']} · {cfg['network']} → {iface['name']} · {iface['network']}。共享与读写模式未改变。")

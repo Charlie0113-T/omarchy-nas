@@ -9,6 +9,7 @@ import os
 import secrets
 import shutil
 import socket
+import ssl
 import tempfile
 import time
 import uuid
@@ -65,6 +66,18 @@ def name_constraints(cfg):
     return "nameConstraints=critical," + ",".join(permitted)
 
 
+def day(seconds):
+    return time.strftime("%Y-%m-%d", time.localtime(seconds))
+
+
+def ca_rotation(tls):
+    # Renewal reuses the CA; only moving it aside lets gateway-init create a new one. Nothing is deleted.
+    stamp = time.strftime("%Y%m%d")
+    return (f"轮换 CA：把 {tls} 中仍存在的 ca.key 与 ca.crt 改名保存（sudo mv -n {tls}/ca.key {tls}/ca.key.old-{stamp}；"
+            f"sudo mv -n {tls}/ca.crt {tls}/ca.crt.old-{stamp}；不要删除），再在 FD 设置页复制 gateway-init 命令并加 --replace 运行，"
+            "生成新 CA 与新配对。之后每台设备都必须重新信任新的 family-nas-ca.crt，并导入新的 pairing.json。")
+
+
 def certificates(address, cfg):
     tls = c.P.etc / "tls"
     c.secure_dir(tls, 0o750)
@@ -82,6 +95,15 @@ def certificates(address, cfg):
         os.chmod(tls / "ca.key", 0o600)
     if not (tls / "ca.crt").exists():
         raise c.NasError("缺少 CA 证书；保留 ca.key 并先修复证书，不自动替换设备已信任的 CA。")
+    # Devices reject the whole chain once the CA expires, so the leaf never outlives it.
+    ca_expires = c.cert_expiry(tls / "ca.crt")
+    ca_days = int((ca_expires - time.time()) // 86400)
+    days = min(365, ca_days - 1)
+    if days < 1:
+        raise c.NasError(f"家庭 CA 证书{'已于' if ca_expires < time.time() else '将于'} {day(ca_expires)} 到期，"
+                         f"不能再签发设备会信任的网关证书，续期无效。\n{ca_rotation(tls)}")
+    if ca_days < 400:
+        print(f"注意：家庭 CA 证书将于 {day(ca_expires)} 到期（剩 {ca_days} 天），网关证书只签发 {days} 天。\n{ca_rotation(tls)}")
     with tempfile.TemporaryDirectory(prefix="leaf-", dir=tls) as tmp:
         tmp = Path(tmp)
         c.atomic(tmp / "extensions", f"subjectAltName=IP:{address}\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
@@ -89,7 +111,7 @@ def certificates(address, cfg):
                "-subj", "/CN=Family NAS/", "-keyout", str(tmp / "key"), "-out", str(tmp / "csr")], timeout=60)
         c.run(["openssl", "x509", "-req", "-in", str(tmp / "csr"), "-CA", str(tls / "ca.crt"),
                "-CAkey", str(tls / "ca.key"), "-set_serial", str(secrets.randbits(128)),
-               "-days", "365", "-sha256", "-extfile", str(tmp / "extensions"), "-out", str(tmp / "crt")])
+               "-days", str(days), "-sha256", "-extfile", str(tmp / "extensions"), "-out", str(tmp / "crt")])
         for source, target in (("key", "server.key"), ("crt", "server.crt")):
             os.chmod(tmp / source, 0o640)
             os.chown(tmp / source, 0, cfg["gid"])
@@ -105,16 +127,21 @@ def allowlist(cfg):
     return [{key: s[key] for key in ("name", "id_type", "id", "fs", "mode")} for s in cfg["shares"]]
 
 
-def wait_ready(address, port=8789, timeout=15):
-    # Type=simple reports active at fork; only a listening socket proves the gateway started.
+def wait_ready(address, port=8789, timeout=15, tls=None):
+    # Type=simple reports active at fork and another program may hold the port: only a TLS
+    # handshake that presents this host's current server.crt proves this gateway started.
+    tls = tls or c.P.etc / "tls"
+    expected = ssl.PEM_cert_to_DER_cert((tls / "server.crt").read_text())
+    context = ssl.create_default_context(cafile=str(tls / "ca.crt"))
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection((address, port), timeout=1):
-                pass
-            if c.run(["systemctl", "is-active", "--quiet", SERVICE], check=False).returncode == 0:
+            with socket.create_connection((address, port), timeout=2) as sock, \
+                    context.wrap_socket(sock, server_hostname=address) as peer:
+                presented = peer.getpeercert(binary_form=True)
+            if presented == expected and c.run(["systemctl", "is-active", "--quiet", SERVICE], check=False).returncode == 0:
                 return
-        except OSError:
+        except (OSError, ValueError):
             pass
         time.sleep(0.5)
     log = ""
@@ -142,7 +169,7 @@ def renew():
         raise c.NasError("尚未配对；请先运行 gateway-init。") from e
     tls = c.P.etc / "tls"
     if not (tls / "ca.key").exists() or not (tls / "ca.crt").exists():
-        raise c.NasError("续期需要原有 tls/ca.key 与 ca.crt；缺失时只能 gateway-init --replace，并让各设备重新信任新 CA。")
+        raise c.NasError(f"续期需要设备已信任的原有 tls/ca.key 与 tls/ca.crt；请先从备份恢复。无法恢复时只能轮换 CA。\n{ca_rotation(tls)}")
     # Reissue only server.crt/server.key; tokenHash, gatewayId and pairing.json stay as they are.
     old_mask = os.umask(0o077)
     try:
@@ -154,8 +181,9 @@ def renew():
         c.run(["systemctl", "restart", SERVICE])
         wait_ready(gateway["bind"], gateway["port"])
         state = f"网关已重启：https://{gateway['bind']}:{gateway['port']}"
-    expires = time.strftime("%Y-%m-%d", time.localtime(c.cert_expiry(tls / "server.crt")))
-    print(f"网关证书已续期至 {expires}。{state}\n"
+    ca_expires = c.cert_expiry(tls / "ca.crt")
+    print(f"网关证书已续期至 {day(c.cert_expiry(tls / 'server.crt'))}。"
+          f"家庭 CA 证书 {day(ca_expires)} 到期（剩 {int((ca_expires - time.time()) // 86400)} 天），续期不能超过它。{state}\n"
           f"配对凭据与 pairing.json 未改变，设备无需重新导入。\n{firewall_note(gateway['network'], gateway['bind'])}")
 
 
@@ -214,4 +242,4 @@ def initialize(args):
           "2. 在 FD → 设置 → 家庭文件导入 pairing.json。配对文件含访问凭据，请勿分享给家庭以外的人。\n"
           "3. 浏览器询问本地网络权限时允许。建议在路由器为 NAS 保留当前 IP。\n"
           f"4. {firewall_note(cfg['network'], address)}\n"
-          "网关证书有效期 1 年；到期前用 sudo omarchy-nas gateway-renew 续期，配对不变。地址或网站更改时以 --replace 重新生成配对。")
+          "网关证书有效期最长 1 年，不超过家庭 CA 的到期日；到期前用 sudo omarchy-nas gateway-renew 续期，配对不变。地址或网站更改时以 --replace 重新生成配对。")

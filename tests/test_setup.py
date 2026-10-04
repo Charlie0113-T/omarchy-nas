@@ -11,6 +11,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -40,6 +41,28 @@ def nas_config(paused=True):
 
 def openssl(*args):
     return subprocess.run(["openssl", *map(str, args)], capture_output=True, text=True)
+
+
+def issue(root, address="127.0.0.1"):
+    # Real CA and gateway certificates in a scratch directory; ownership is simulated.
+    with patch.object(c, "P", types.SimpleNamespace(etc=Path(root))), patch.object(c, "secure_dir", side_effect=make_test_dir), patch.object(setup.os, "chown"):
+        setup.certificates(address, {"gid": os.getgid(), "network": "127.0.0.0/8"})
+    return Path(root) / "tls"
+
+
+def tls_server(cert, key):
+    # Another HTTPS program holding the gateway port.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    listener = socket.create_server(("127.0.0.1", 0))
+    def accept():
+        with contextlib.suppress(OSError):
+            while True:
+                conn, _ = listener.accept()
+                with contextlib.suppress(OSError), conn, context.wrap_socket(conn, server_side=True):
+                    pass
+    threading.Thread(target=accept, daemon=True).start()
+    return listener
 
 
 class SetupTests(unittest.TestCase):
@@ -140,6 +163,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(calls, [["systemctl", "is-active", "--quiet", setup.SERVICE], ["systemctl", "restart", setup.SERVICE]] * 2)
             ready.assert_called_with("192.168.1.24", 8789)
             self.assertIn("pairing.json 未改变", out.getvalue())
+            self.assertIn("家庭 CA 证书 " + setup.day(c.cert_expiry(etc / "tls/ca.crt")) + " 到期（剩 1824 天）", out.getvalue())
             self.assertIn("port 8789 proto tcp", out.getvalue())
 
     def test_renew_does_not_start_a_stopped_gateway(self):
@@ -160,13 +184,47 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             (Path(root) / "gateway.json").write_text(json.dumps({"bind": "192.168.1.24", "port": 8789}))
             with patch.object(setup.c, "P", types.SimpleNamespace(etc=Path(root))), patch.object(c, "load_config", return_value=nas_config()), \
-                 patch.object(cli, "root"), patch.object(setup, "certificates") as certs, self.assertRaisesRegex(c.NasError, "ca.key"):
+                 patch.object(cli, "root"), patch.object(setup, "certificates") as certs, self.assertRaisesRegex(c.NasError, "ca.key") as raised:
                 setup.renew()
             certs.assert_not_called()
+            for part in ("轮换 CA", "sudo mv -n", "--replace", "family-nas-ca.crt", "pairing.json"):
+                self.assertIn(part, str(raised.exception))
             (Path(root) / "gateway.json").unlink()
             with patch.object(setup.c, "P", types.SimpleNamespace(etc=Path(root))), patch.object(c, "load_config", return_value=nas_config()), \
                  patch.object(cli, "root"), self.assertRaisesRegex(c.NasError, "尚未配对"):
                 setup.renew()
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_renewed_leaf_never_outlives_ca(self):
+        real_run = c.run
+        def short_ca(args, **kwargs):
+            # Model the CA's last month: same commands, a 30-day CA.
+            return real_run(["30" if arg == "1825" else arg for arg in args], **kwargs)
+        with tempfile.TemporaryDirectory() as root, patch.object(c, "run", side_effect=short_ca), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            issue(root)
+            tls = issue(root)
+            ca, leaf = c.cert_expiry(tls / "ca.crt"), c.cert_expiry(tls / "server.crt")
+        self.assertLessEqual(leaf, ca - 86400)
+        self.assertAlmostEqual(leaf, time.time() + 28 * 86400, delta=300)
+        self.assertIn("剩 29 天", out.getvalue())
+        self.assertIn("网关证书只签发 28 天", out.getvalue())
+        self.assertIn("轮换 CA", out.getvalue())
+
+    def test_expired_ca_is_not_used_to_sign(self):
+        for left, word in ((-86400, "已于"), (1.5 * 86400, "将于")):
+            with self.subTest(word=word), tempfile.TemporaryDirectory() as root:
+                tls = Path(root) / "tls"; tls.mkdir(); (tls / "ca.key").write_text("k"); (tls / "ca.crt").write_text("c")
+                with patch.object(c, "P", types.SimpleNamespace(etc=Path(root))), patch.object(c, "secure_dir", side_effect=make_test_dir), \
+                     patch.object(setup.os, "chown"), patch.object(c, "cert_expiry", return_value=time.time() + left) as expiry, \
+                     patch.object(c, "run") as run, self.assertRaises(c.NasError) as raised:
+                    setup.certificates("192.168.1.24", nas_config())
+                expiry.assert_called_once_with(tls / "ca.crt")
+                run.assert_not_called()
+                for part in (word, "续期无效", f"{tls}/ca.key.old-", f"{tls}/ca.crt.old-", "--replace", "family-nas-ca.crt", "pairing.json"):
+                    self.assertIn(part, str(raised.exception))
+                self.assertEqual(sorted(p.name for p in tls.iterdir()), ["ca.crt", "ca.key"])
+                self.assertFalse((Path(root) / "family-nas-ca.crt").exists())
 
     def test_gateway_unit_is_sandboxed_without_hiding_devices(self):
         text = setup.unit({"user": "charles", "gid": 1000})
@@ -178,18 +236,52 @@ class SetupTests(unittest.TestCase):
         for line in ("PrivateDevices", "ProtectSystem=strict", "SystemCallFilter"):
             self.assertNotIn(line, text)
 
-    def test_wait_ready_needs_a_listening_gateway(self):
-        active = types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0)); listener.listen()
-            port = listener.getsockname()[1]
-            with patch.object(c, "run", return_value=active):
-                setup.wait_ready("127.0.0.1", port, timeout=5)
-        log = types.SimpleNamespace(returncode=0, stdout="OSError: [Errno 99] Cannot assign requested address\n\x1b[31m", stderr="")
-        with patch.object(c, "run", return_value=log) as run, self.assertRaisesRegex(c.NasError, "Errno 99") as raised:
-            setup.wait_ready("127.0.0.1", port, timeout=1)
-        self.assertNotIn("\x1b", str(raised.exception))
-        self.assertEqual(run.call_args.args[0][:3], ["journalctl", "-u", setup.SERVICE])
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_wait_ready_rejects_foreign_listeners(self):
+        # systemd reports the crash-looping gateway active; the journal shows why it cannot bind.
+        def fake_run(args, **kwargs):
+            out = "OSError: [Errno 98] Address already in use\n\x1b[31m" if args[0] == "journalctl" else ""
+            return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
+        with tempfile.TemporaryDirectory() as root:
+            tls = issue(root)
+            for name in ("crt", "key"):
+                shutil.copy(tls / f"server.{name}", Path(root) / f"previous.{name}")
+            issue(root)
+            openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=Other/", "-addext", "subjectAltName=IP:127.0.0.1",
+                    "-keyout", Path(root) / "other.key", "-out", Path(root) / "other.crt")
+            plain = socket.create_server(("127.0.0.1", 0))
+            listeners = {"plain TCP": plain, "foreign TLS": tls_server(Path(root) / "other.crt", Path(root) / "other.key"),
+                         "same CA, not this server.crt": tls_server(Path(root) / "previous.crt", Path(root) / "previous.key")}
+            try:
+                for case, listener in listeners.items():
+                    with self.subTest(case=case), patch.object(c, "run", side_effect=fake_run) as run, \
+                         self.assertRaisesRegex(c.NasError, "Errno 98") as raised:
+                        setup.wait_ready("127.0.0.1", listener.getsockname()[1], timeout=1, tls=tls)
+                    self.assertNotIn("\x1b", str(raised.exception))
+                    self.assertEqual(run.call_args.args[0][:3], ["journalctl", "-u", setup.SERVICE])
+            finally:
+                for listener in listeners.values():
+                    with contextlib.suppress(OSError):
+                        listener.shutdown(socket.SHUT_RDWR)
+                    listener.close()
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_wait_ready_accepts_this_gateway(self):
+        with tempfile.TemporaryDirectory() as root:
+            tls = issue(root)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(tls / "server.crt", tls / "server.key")
+            cfg = {"bind": "127.0.0.1", "port": 0, "network": "127.0.0.0/8", "hosts": [], "origins": [ORIGIN], "familyId": FAMILY,
+                   "gatewayId": "ready", "shares": [], "maxUploadBytes": g.MAX_UPLOAD, "tokenHash": "a" * 64}
+            server = g.GatewayServer(cfg)
+            server.tls_context = context
+            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+            try:
+                with patch.object(c, "run", return_value=types.SimpleNamespace(returncode=0, stdout="", stderr="")) as run:
+                    setup.wait_ready("127.0.0.1", server.server_address[1], timeout=5, tls=tls)
+                self.assertEqual(run.call_args.args[0], ["systemctl", "is-active", "--quiet", setup.SERVICE])
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=5)
 
     def initialize(self, cfg, tmp, *, interfaces=None, address=None, replace=False, ufw="ENABLED=yes\n", ready_error=None):
         etc = Path(tmp)

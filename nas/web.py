@@ -58,8 +58,10 @@ def snapshot():
             result["errors"].append(str(e))
     if (c.P.etc / "gateway.json").exists():
         try:
-            expires = c.cert_expiry(c.P.etc / "tls/server.crt")
-            result["gateway_certificate"] = {"not_after": expires, "days_left": int((expires - time.time()) // 86400)}
+            # The panel user can read the public family-nas-ca.crt copy, not the root-only tls/ca.crt.
+            expires, ca = c.cert_expiry(c.P.etc / "tls/server.crt"), c.cert_expiry(c.P.etc / "family-nas-ca.crt")
+            result["gateway_certificate"] = {"not_after": expires, "days_left": int((expires - time.time()) // 86400),
+                                             "ca_not_after": ca, "ca_days_left": int((ca - time.time()) // 86400)}
         except (c.NasError, ValueError, OSError) as e:
             result["errors"].append(f"网关证书无法读取：{e}")
     return result
@@ -69,7 +71,8 @@ def demo_snapshot():
     return {"version": c.VERSION, "hostname": "mac-mini-lab", "demo": True, "time": time.time(),
             "configured": True, "service_active": True, "user": "charles", "network": "192.168.1.0/24",
             "interface": "enp0s20u1", "errors": [], "interfaces": [{"name": "enp0s20u1", "ip": "192.168.1.24", "network": "192.168.1.0/24"}],
-            "gateway_certificate": {"not_after": time.time() + 21 * 86400, "days_left": 21},
+            "gateway_certificate": {"not_after": time.time() + 21 * 86400, "days_left": 21,
+                                    "ca_not_after": time.time() + 1460 * 86400, "ca_days_left": 1460},
             "shares": [{"name": "family", "fs": "apfs", "size": 12_000_000_000_000, "mode": "ro", "state": "online", "enabled": True,
                         "online": True, "url": "smb://192.168.1.24/family", "volume": 0}],
             "devices": [
