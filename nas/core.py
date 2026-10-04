@@ -352,7 +352,8 @@ def verify_mount(share, device, p=P):
         mismatch = "挂载设备与登记设备不一致"
     if mismatch:
         # A replug leaves the old mount on its vanished node while the disk returns under a new one.
-        if source.startswith("/dev/") and not os.path.exists(source):
+        # findmnt shows bind mounts as /dev/sdX[/dir]; those are a different mount, not a vanished node.
+        if source.startswith("/dev/") and "[" not in source and not os.path.exists(source):
             raise NasError(f"陈旧挂载：{share['name']} 的磁盘已断开后重新接入（挂载仍指向已消失的 {clean(source)}，当前为 {device['path']}）。"
                            f"请先 sudo omarchy-nas pause {share['name']} 再 resume {share['name']}。")
         raise NasError(mismatch)

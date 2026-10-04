@@ -512,6 +512,37 @@ class GatewayTests(unittest.TestCase):
         self.wait_for_no_peers()
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_preflight_alone_cannot_keep_a_connection(self):
+        preflight = (f"OPTIONS /v1/file HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nOrigin: {ORIGIN}\r\n"
+                     "Access-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: authorization,content-type,x-fd-family\r\n\r\n").encode()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=2) as sock:
+            sock.sendall(preflight)
+            response = read_all(sock)  # the server must close after one tokenless preflight
+        self.assertTrue(response.startswith(b"HTTP/1.1 204 "))
+        self.assertIn(b"Connection: close", response)
+        self.wait_for_no_peers()
+        # A connection that already passed the full check keeps keep-alive for later preflights.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=4)
+        try:
+            conn.request("GET", "/v1/status", headers={"Origin": ORIGIN, "Authorization": f"Bearer {TOKEN}", "X-FD-Family": FAMILY})
+            conn.getresponse().read()
+            conn.request("OPTIONS", "/v1/file", headers={"Origin": ORIGIN, "Access-Control-Request-Method": "PUT"})
+            response = conn.getresponse()
+            response.read()
+            self.assertEqual((response.status, response.getheader("Connection")), (204, None))
+        finally:
+            conn.close()
+
+    def test_ntfs_name_key_matches_windows_not_casefold(self):
+        self.share["fs"] = "ntfs"
+        (self.root / "straße.txt").write_bytes(b"x")
+        (self.root / "ﬁle.pdf").write_bytes(b"x")
+        self.files.check_upload("family", "strasse.txt", 10)
+        self.files.check_upload("family", "file.pdf", 10)
+        with self.assertRaises(g.ApiError) as raised:
+            self.files.check_upload("family", "STRAßE.TXT", 10)
+        self.assertEqual(raised.exception.code, "already_exists")
+
     def test_upload_check_reports_each_pre_body_error_without_writing(self):
         (self.root / "dir").mkdir()
         (self.root / "dir/taken.txt").write_bytes(b"x")

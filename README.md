@@ -163,16 +163,9 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 
 ## 验证记录 · 2026-10-04
 
-已完成：
+云端已完成代码检查（FD 124 项、Python 109 项自动测试，构建与 lint，三轮审查）和**模拟**传输检查（真实网关代码 + 临时目录；无头 Chromium + 真实 FD 页面，网络与证书信任为模拟）。真机验收（Mac mini、硬盘柜、家庭 Wi-Fi、iPhone/Mac 浏览器）尚未开始。三类结果与待验收清单见 `VERIFICATION.md`。
 
-- Python 编译、CLI 帮助及当前容器内真实只读 lsblk 扫描。
-- 47 项自动检查：35 项磁盘、共享与状态页检查，加 12 项网关检查（真实 HTTP 文件传输、TLS 信任、来源/凭据/家庭校验、同名保护、只读与越界拦截等）。
-- 使用模拟的系统命令验证 FUSE 服务生命周期配置和失败处理；这些不是实盘挂载测试。
-
-页面与 FD→NAS 流程只在云端做过**模拟**浏览器检查（无头 Chromium + 真实网关代码 + 临时目录，没有真实 NAS、USB 盘、家庭网络或系统级证书信任）；真机验收尚未完成。三类结果的区分见 `VERIFICATION.md`。
-
-当前环境没有目标 USB 数据盘、systemd 主机会话和完整 Samba；无法完成真实 SMB/重启/拔插测试。
-第一次真机验收顺序：`doctor` → 默认只读 setup → Mac/iPad 登录并打开已知文件 → pause 正常卸载 → resume → 重启后检查。
+第一次真机验收顺序：`doctor` → `setup --writable`（ext4 上传盘）→ Mac/iPad 登录 SMB 读写测试文件 → `gateway-init` → 设备信任证书、FD 导入配对 → 上传/下载比对 → pause / resume → 重启后检查。
 只有上述成功后，才把相应硬件/文件系统标为实测通过。APFS 不包含写入验收。
 
 ## 源码与复现

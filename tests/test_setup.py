@@ -279,9 +279,29 @@ class SetupTests(unittest.TestCase):
             try:
                 with patch.object(c, "run", return_value=types.SimpleNamespace(returncode=0, stdout="", stderr="")) as run:
                     setup.wait_ready("127.0.0.1", server.server_address[1], timeout=5, tls=tls)
-                self.assertEqual(run.call_args.args[0], ["systemctl", "is-active", "--quiet", setup.SERVICE])
+                self.assertIn(["systemctl", "is-active", "--quiet", setup.SERVICE], [call.args[0] for call in run.call_args_list])
             finally:
                 server.shutdown(); server.server_close(); thread.join(timeout=5)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_wait_ready_pins_the_certificate_and_reports_expiry_instead_of_timing_out(self):
+        # An expired (or otherwise unverifiable) server.crt still identifies this gateway; upgrade must
+        # not call it "not started" but point at gateway-renew.
+        with tempfile.TemporaryDirectory() as root:
+            tls = issue(root)
+            openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=Unchained/", "-addext", "subjectAltName=IP:127.0.0.1",
+                    "-keyout", tls / "server.key", "-out", tls / "server.crt")
+            listener = tls_server(tls / "server.crt", tls / "server.key")
+            expiry = lambda path: time.time() - 86400 if path.name == "server.crt" else time.time() + 86400 * 400
+            try:
+                with patch.object(c, "run", return_value=types.SimpleNamespace(returncode=0, stdout="", stderr="")), \
+                     patch.object(c, "cert_expiry", side_effect=expiry), contextlib.redirect_stdout(io.StringIO()) as out:
+                    setup.wait_ready("127.0.0.1", listener.getsockname()[1], timeout=3, tls=tls)
+                self.assertIn("gateway-renew", out.getvalue())
+            finally:
+                with contextlib.suppress(OSError):
+                    listener.shutdown(socket.SHUT_RDWR)
+                listener.close()
 
     def initialize(self, cfg, tmp, *, interfaces=None, address=None, replace=False, ufw="ENABLED=yes\n", ready_error=None):
         etc = Path(tmp)

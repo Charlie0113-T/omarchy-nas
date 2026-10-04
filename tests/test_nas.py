@@ -292,6 +292,16 @@ class MountTests(unittest.TestCase):
         probe.assert_not_called()
         self.assertEqual(calls, [])
 
+    def test_bind_mount_source_is_a_mismatch_not_a_stale_mount(self):
+        dev = {"path": "/dev/sdd2", "major_minor": "8:50"}
+        for fs, fstype, expected in (("ext4", "ext4", "挂载设备与登记设备不一致"), ("ntfs", "fuse.ntfs-3g", "FUSE 挂载源未能核实；拒绝共享")):
+            share = config(fs, "rw")["shares"][0]
+            info = {"fstype": fstype, "source": "/dev/sda2[/home/x]", "maj:min": "8:2", "options": "rw,nosuid,nodev,noexec"}
+            with self.subTest(fs=fs), patch.object(c, "mount_info", return_value=info), node_exists("/dev/sda2[/home/x]", False), \
+                 self.assertRaises(c.NasError) as raised:
+                c.verify_mount(share, dev)
+            self.assertEqual(str(raised.exception), expected)
+
     def test_apfs_mount_command_uses_resolved_node(self):
         cfg = config(); dev = c.inventory(fixture())[-1]
         with udev("/dev/sdc2"):
@@ -518,6 +528,28 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual([call.args[0] for call in expiry.call_args_list], list(expiries))
             self.assertEqual(snap["gateway_certificate"], {"not_after": expiries[p.etc / "tls/server.crt"], "days_left": 9,
                                                            "ca_not_after": expiries[p.etc / "family-nas-ca.crt"], "ca_days_left": 80})
+
+    def test_status_keeps_gateway_expiry_without_the_public_ca_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(etc=Path(tmp), run=Path(tmp))
+            (p.etc / "gateway.json").write_text("{}")
+            def expiry(path):
+                if path.name == "family-nas-ca.crt":
+                    raise c.NasError("openssl 失败（1）：STORE routines: unregistered scheme")
+                return time.time() + 9.5 * 86400
+            with patch.object(c, "P", p), patch.object(c, "inventory", return_value=[]), patch.object(c, "network_interfaces", return_value=[]), \
+                 patch.object(c, "cert_expiry", side_effect=expiry):
+                snap = web.snapshot()
+        self.assertEqual(snap["gateway_certificate"]["days_left"], 9)
+        self.assertNotIn("ca_days_left", snap["gateway_certificate"])
+        self.assertTrue(any("family-nas-ca.crt" in e for e in snap["errors"]))
+        self.assertFalse(any("STORE routines" in e for e in snap["errors"]))
+
+    def test_version_strings_agree(self):
+        base = Path(__file__).resolve().parents[1]
+        self.assertIn(c.VERSION, (base / "README.md").read_text().splitlines()[0])
+        self.assertIn(f"版本：{c.VERSION}", (base / "VERIFICATION.md").read_text())
+        self.assertIn(f"v{c.VERSION}", (base / "nas/assets/index.html").read_text())
 
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
     def test_certificate_expiry_is_read_from_the_certificate(self):

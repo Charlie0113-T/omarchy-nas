@@ -58,12 +58,17 @@ def snapshot():
             result["errors"].append(str(e))
     if (c.P.etc / "gateway.json").exists():
         try:
-            # The panel user can read the public family-nas-ca.crt copy, not the root-only tls/ca.crt.
-            expires, ca = c.cert_expiry(c.P.etc / "tls/server.crt"), c.cert_expiry(c.P.etc / "family-nas-ca.crt")
-            result["gateway_certificate"] = {"not_after": expires, "days_left": int((expires - time.time()) // 86400),
-                                             "ca_not_after": ca, "ca_days_left": int((ca - time.time()) // 86400)}
+            expires = c.cert_expiry(c.P.etc / "tls/server.crt")
+            result["gateway_certificate"] = {"not_after": expires, "days_left": int((expires - time.time()) // 86400)}
         except (c.NasError, ValueError, OSError) as e:
             result["errors"].append(f"网关证书无法读取：{e}")
+        if result.get("gateway_certificate"):
+            try:
+                # The panel user can read the public family-nas-ca.crt copy, not the root-only tls/ca.crt.
+                ca = c.cert_expiry(c.P.etc / "family-nas-ca.crt")
+                result["gateway_certificate"].update(ca_not_after=ca, ca_days_left=int((ca - time.time()) // 86400))
+            except (c.NasError, ValueError, OSError):
+                result["errors"].append("家庭 CA 公开副本 /etc/omarchy-nas/family-nas-ca.crt 缺失或不可读，无法显示 CA 到期日。")
     return result
 
 

@@ -132,7 +132,10 @@ def wait_ready(address, port=8789, timeout=15, tls=None):
     # handshake that presents this host's current server.crt proves this gateway started.
     tls = tls or c.P.etc / "tls"
     expected = ssl.PEM_cert_to_DER_cert((tls / "server.crt").read_text())
-    context = ssl.create_default_context(cafile=str(tls / "ca.crt"))
+    # Pin the exact certificate instead of verifying the chain, so an expired leaf or CA reports
+    # as expired below rather than as a gateway that never started.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -140,6 +143,7 @@ def wait_ready(address, port=8789, timeout=15, tls=None):
                     context.wrap_socket(sock, server_hostname=address) as peer:
                 presented = peer.getpeercert(binary_form=True)
             if presented == expected and c.run(["systemctl", "is-active", "--quiet", SERVICE], check=False).returncode == 0:
+                warn_expired(tls)
                 return
         except (OSError, ValueError):
             pass
@@ -149,6 +153,15 @@ def wait_ready(address, port=8789, timeout=15, tls=None):
         out = c.run(["journalctl", "-u", SERVICE, "-n", "20", "--no-pager", "-o", "cat"], check=False)
         log = "\n".join(c.clean(line) for line in out.stdout.splitlines())
     raise c.NasError(f"网关未在 {timeout} 秒内就绪（{address}:{port}）。最近日志：\n{log or '（无）'}")
+
+
+def warn_expired(tls):
+    now = time.time()
+    with contextlib.suppress(c.NasError, OSError, ValueError):
+        if c.cert_expiry(tls / "ca.crt") < now:
+            print("警告：家庭 CA 证书已到期，所有设备都会拒绝连接；需要按 gateway-renew 给出的步骤轮换 CA。")
+        elif c.cert_expiry(tls / "server.crt") < now:
+            print("警告：网关服务器证书已到期，FD 无法连接；运行 sudo omarchy-nas gateway-renew 续期（无需重新配对）。")
 
 
 def firewall_note(network, address):

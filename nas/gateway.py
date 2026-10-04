@@ -123,6 +123,11 @@ def renameat2(parent_fd, source, target):
     return ctypes.get_errno() if func(parent_fd, os.fsencode(source), parent_fd, os.fsencode(target), RENAME_NOREPLACE) else 0
 
 
+def ntfs_key(name):
+    # NTFS compares names through a 1:1 upcase table, so 'ß' never equals 'ss' (unlike casefold()).
+    return "".join(u if len(u := ch.upper()) == 1 else ch for ch in name)
+
+
 def rename_new(parent_fd, source, target, fs=None):
     # Never fall back to an overwriting rename. renameat2(RENAME_NOREPLACE) works
     # without hard links (FAT/exFAT); ntfs-3g's FUSE protocol has no rename flags,
@@ -268,8 +273,8 @@ class Files:
                     raise ApiError(409, "already_exists")
                 # ntfs-3g is case-sensitive, but FD (and Windows) treat case variants as the same name.
                 if s["fs"] == "ntfs":
-                    folded = parts[-1].casefold()
-                    if any(n.casefold() == folded for n in os.listdir(parent)):
+                    key = ntfs_key(parts[-1])
+                    if any(ntfs_key(n) == key for n in os.listdir(parent)):
                         raise ApiError(409, "already_exists")
             yield parent, parts[-1], s
 
@@ -558,6 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(401, "unauthorized")
             if self.headers.get("X-FD-Family") != cfg["familyId"]:
                 raise ApiError(403, "family_mismatch")
+            self.authorized = True
 
     def headers_for(self, status, length, content_type):
         self.send_response(status)
@@ -647,6 +653,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(403, "header_denied")
             if self.headers.get("Access-Control-Request-Method") not in {"GET", "POST", "PUT"}:
                 raise ApiError(403, "method_denied")
+            # A preflight needs no token: never let one keep a connection slot alive by itself.
+            if not getattr(self, "authorized", False):
+                self.close_connection = True
             self.headers_for(204, 0, "application/json")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-FD-Family")
