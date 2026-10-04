@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Omarchy NAS · 存储总览</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<div class="shell">
+  <aside class="sidebar"><a class="brand" href="/" aria-label="Omarchy NAS 首页"><span class="brand-mark">n.</span><span>omarchy<span class="brand-sub">NAS / LOCAL STORAGE</span></span></a><div class="nav-current">▦ <span>存储总览</span></div><div class="side-note"><span class="status-dot"></span> 在你的电脑上运行<p>文件通过家庭网络共享。</p><span id="version">v0.2.0</span></div></aside>
+  <main>
+    <header><div><div class="eyebrow">YOUR HOME, CONNECTED</div><h1>存储总览<span class="title-dot">.</span></h1><p class="subtitle" id="host">正在读取本机状态…</p></div><button id="refresh" class="button outline">刷新状态 <span aria-hidden="true">↻</span></button></header>
+    <div id="demo-banner" class="notice" hidden>演示模式 · 页面中的设备、容量和连接地址均为示例，不代表你的机器已接通。</div>
+    <div id="errors" role="status"></div>
+    <section class="summary" aria-label="存储概览"><div><span class="label">在线共享</span><strong id="count">—</strong><small id="service-state">读取中</small></div><div><span class="label">已登记容量</span><strong id="capacity">—</strong><small>卷容量总和，不代表剩余空间</small></div><div><span class="label">访问方式</span><strong class="protocol">SMB 3</strong><small>密码登录 · 连接加密</small></div></section>
+    <section class="section"><div class="section-head"><div><h2>共享空间</h2><p>查看连接地址，或管理已登记的磁盘卷。</p></div><span class="pill neutral">家庭网络</span></div><div id="shares" class="shares"></div></section>
+    <section class="section"><div class="section-head"><div><h2>已发现的磁盘</h2><p>自动识别设备；首次共享时选择要接入的卷。</p></div><button class="text-button" id="doctor">查看诊断命令 ↗</button></div><div id="devices" class="devices"></div></section>
+    <section class="connect"><span class="connect-icon" aria-hidden="true">↗</span><div><h2>在 Mac、iPad 或 Windows 上连接</h2><p>Mac：Finder → 前往 → 连接服务器。iPad：文件 → ⋯ → 连接服务器。输入上面的 SMB 地址，选择“注册用户”，使用 NAS 账号和密码登录。</p><p class="muted">Windows 在文件资源管理器输入 \\主机IP\共享名。管理页面只在这台电脑上打开。</p></div></section>
+    <footer><span>OMARCHY NAS <span class="muted">/ 独立社区扩展</span></span><span id="updated">等待首次读取</span></footer>
+  </main>
+</div>
+<dialog id="command-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><span class="eyebrow">在主机终端执行</span><h2 id="dialog-title"></h2><p id="dialog-text"></p><textarea id="command" readonly rows="3" aria-label="操作命令"></textarea><button id="copy-command" class="button">复制命令</button><p class="dialog-note">磁盘和服务操作在终端确认，状态页本身不申请管理员权限。</p></dialog>
+<div id="toast" role="status" hidden></div>
+</body></html>
