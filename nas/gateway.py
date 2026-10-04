@@ -155,6 +155,8 @@ class Files:
         self.gateway, self.p = gateway, p
         self.lock = threading.Lock()
         self.reserved = {}
+        # Staging name -> dup of its parent fd, so stop() can remove what a killed upload leaves.
+        self.active = {}
         self.stopping = threading.Event()
 
     def share(self, name):
@@ -227,9 +229,10 @@ class Files:
                     hidden += 1
                     continue
                 if stat.S_ISDIR(info.st_mode):
-                    # e.g. ext4's root-only lost+found.
                     if not os.access(entry, os.R_OK | os.X_OK, dir_fd=fd, follow_symlinks=False):
-                        hidden += 1
+                        # ext4's root-only lost+found at the volume root holds no family files.
+                        if parts or entry != "lost+found":
+                            hidden += 1
                         continue
                 elif not stat.S_ISREG(info.st_mode):
                     continue
@@ -263,6 +266,11 @@ class Files:
                     pass
                 else:
                     raise ApiError(409, "already_exists")
+                # ntfs-3g is case-sensitive, but FD (and Windows) treat case variants as the same name.
+                if s["fs"] == "ntfs":
+                    folded = parts[-1].casefold()
+                    if any(n.casefold() == folded for n in os.listdir(parent)):
+                        raise ApiError(409, "already_exists")
             yield parent, parts[-1], s
 
     def reserve(self, parent, length):
@@ -284,13 +292,36 @@ class Files:
         with self.target(name, path, length) as (parent, _name, _s):
             self.release(self.reserve(parent, length), length)
 
+    def stage(self, parent):
+        staging, held = STAGING + secrets.token_hex(16), os.dup(parent)
+        try:
+            with self.lock:
+                # Created and registered under the lock: abandon() either sees it or no upload starts after it.
+                if self.stopping.is_set():
+                    raise ApiError(503, "shutting_down")
+                fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+                self.active[staging] = held
+        except BaseException:
+            os.close(held)
+            raise
+        return staging, fd
+
+    def abandon(self):
+        # Uploads still in fsync/commit when the stop grace ends die with the process. Only staging
+        # names are removed; a committed upload no longer has one (or keeps its target link on NTFS).
+        with self.lock:
+            for staging, parent in self.active.items():
+                with contextlib.suppress(OSError):
+                    os.unlink(staging, dir_fd=parent)
+                os.close(parent)
+            self.active.clear()
+
     def upload(self, name, path, source, length):
         with self.target(name, path, length) as (parent, filename, s), storage_errors():
             dev = self.reserve(parent, length)
             remaining = length
             try:
-                staging = STAGING + secrets.token_hex(16)
-                fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+                staging, fd = self.stage(parent)
                 committed = False
                 try:
                     with os.fdopen(fd, "wb") as out:
@@ -312,6 +343,10 @@ class Files:
                     if not committed:
                         with contextlib.suppress(FileNotFoundError):
                             os.unlink(staging, dir_fd=parent)
+                    with self.lock:
+                        held = self.active.pop(staging, None)
+                    if held is not None:
+                        os.close(held)
             finally:
                 self.release(dev, remaining)
         return {"name": filename, "size": length}
@@ -343,10 +378,19 @@ class Body:
         self.left -= len(chunk)
         return chunk
 
-    def drain(self, stopping):
+    def drain(self, stopping, connection):
+        # A wall-clock limit: each wait is capped by the time left and read1 does at most one recv,
+        # so a slow drip cannot hold the connection past the deadline.
         deadline = time.monotonic() + DRAIN_DEADLINE
-        while self.left and not stopping.is_set() and time.monotonic() < deadline and self.read(CHUNK):
-            pass
+        while self.left and not stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            connection.settimeout(min(45, remaining))
+            chunk = self.raw.read1(min(CHUNK, self.left))
+            if not chunk:
+                break
+            self.left -= len(chunk)
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -402,13 +446,15 @@ class GatewayServer(ThreadingHTTPServer):
             (self.connections.add if active else self.connections.discard)(connection)
 
     def stop(self, grace):
-        # Unblock readers so in-flight uploads end and remove their staging files.
+        # Unblock readers so in-flight uploads end and remove their staging files. Known limit:
+        # OpenSSL treats this EOF as fatal, so TLS clients see a reset, not the 503 shutting_down.
         self.files.stopping.set()
         with self.peer_lock:
             for connection in self.connections:
                 with contextlib.suppress(OSError):
                     socket.socket.shutdown(connection, socket.SHUT_RD)
             self.peer_lock.wait_for(lambda: not self.peers, grace)
+        self.files.abandon()
 
     def run(self, grace=20):
         # systemd stop/restart sends SIGTERM; the default action would skip upload cleanup.
@@ -571,7 +617,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(status, {"error": code})
                 # Browsers report a reset, not the response, if the unread upload is cut off.
                 if self.body and code != "shutting_down":
-                    self.body.drain(self.server.files.stopping)
+                    self.body.drain(self.server.files.stopping, self.connection)
         try:
             fn()
         except ApiError as e:
@@ -620,8 +666,8 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         s = self.server.files.share(name)
                         shares.append({"name": name, "online": True, "writable": writable(s), "fs": s["fs"]})
-                    except ApiError:
-                        shares.append({"name": name, "online": False, "writable": False, "fs": ""})
+                    except ApiError as e:
+                        shares.append({"name": name, "online": False, "writable": False, "fs": "", "reason": e.code})
                 self.json(200, {"protocolVersion": API_VERSION, "gatewayId": self.server.config["gatewayId"],
                                 "familyId": self.server.config["familyId"], "homeNetwork": True,
                                 "clientIp": self.client_address[0], "shares": shares,
@@ -673,11 +719,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         def action():
             self.denied = "permission_denied"
+            # Only an authorized upload is drained for a readable error; others close at once.
+            self.check()
             lengths = self.headers.get_all("Content-Length", [])
             length = None if self.headers.get("Transfer-Encoding") or len(lengths) != 1 else number(lengths[0])
             if length is not None and length <= self.server.config["maxUploadBytes"]:
                 self.body = Body(self.rfile, length)
-            self.check()
             route, arg = self.route()
             if route != "/v1/file":
                 raise ApiError(404, "not_found")

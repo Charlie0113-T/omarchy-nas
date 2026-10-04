@@ -34,11 +34,17 @@ OCTET = {"Content-Type": "application/octet-stream"}
 
 # Runs the real serve loop in a child process with the same mocks as GatewayTests.
 LAUNCHER = r"""
-import json, os, sys, types
+import json, os, sys, time, types
 from pathlib import Path
 from unittest.mock import patch
 from nas import gateway as g
-mounts, cfg = Path(sys.argv[1]), json.loads(sys.argv[2])
+mounts, cfg, grace, delay = Path(sys.argv[1]), json.loads(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+real_fsync = os.fsync
+def slow_fsync(fd):
+    # Stands in for a slow USB disk writing back a large upload.
+    time.sleep(delay)
+    real_fsync(fd)
+patch.object(g.os, "fsync", side_effect=slow_fsync).start()
 files = g.Files(cfg, types.SimpleNamespace(mounts=mounts))
 patch.object(files, "share", return_value={"mode": "rw", "fs": "ext4"}).start()
 real_stat = os.stat
@@ -53,7 +59,7 @@ patch.object(g.os, "stat", side_effect=stat_with_mount).start()
 server = g.GatewayServer(cfg, files=files)
 cfg["hosts"] = [f"127.0.0.1:{server.server_address[1]}"]
 print(server.server_address[1], flush=True)
-server.run(grace=5)
+server.run(grace=grace)
 """
 
 
@@ -70,6 +76,14 @@ def read_all(sock):
     while chunk := sock.recv(65536):
         data += chunk
     return data
+
+
+def put_head(port, path, length, auth=True):
+    lines = [f"PUT /v1/file?share=family&path={path} HTTP/1.1", f"Host: 127.0.0.1:{port}", f"Origin: {ORIGIN}",
+             "Content-Type: application/octet-stream", f"Content-Length: {length}"]
+    if auth:
+        lines += [f"Authorization: Bearer {TOKEN}", f"X-FD-Family: {FAMILY}"]
+    return ("\r\n".join(lines) + "\r\n\r\n").encode()
 
 
 class NameRuleTests(unittest.TestCase):
@@ -274,6 +288,28 @@ class GatewayTests(unittest.TestCase):
         status, _, body = self.request("GET", "/v1/status")
         self.assertEqual((status, json.loads(body)["shares"]), (200, [{"name": "family", "online": True, "writable": True, "fs": "ext4"}]))
 
+    def test_status_says_why_a_share_is_offline(self):
+        # The real Files.share; only the config and the USB device lookup are mocked.
+        self.share_mock.side_effect = lambda name: g.Files.share(self.files, name)
+        for name in ("inventory", "match_device", "verify_mount"):
+            patch.object(g.c, name).start()
+        live = dict(PAIRED, enabled=True)
+        patch.object(g.c, "load_config", return_value={"shares": [live]}).start()
+        self.cfg["shares"] = [PAIRED]
+        def shares():
+            status, _, body = self.request("GET", "/v1/status")
+            self.assertEqual(status, 200)
+            return json.loads(body)["shares"]
+        self.assertEqual(shares(), [{"name": "family", "online": True, "writable": True, "fs": "ext4"}])
+        offline = {"name": "family", "online": False, "writable": False, "fs": ""}
+        live["id"] = "other-disk"
+        self.assertEqual(shares(), [dict(offline, reason="share_changed")])
+        live.update(id="usb-1", enabled=False)
+        self.assertEqual(shares(), [dict(offline, reason="share_offline")])
+        live["enabled"] = True
+        g.c.verify_mount.side_effect = c.NasError("not mounted")
+        self.assertEqual(shares(), [dict(offline, reason="share_offline")])
+
     def test_commit_without_rename_flags_links_and_never_overwrites(self):
         calls = []
         def renameat2(parent, _source, _parent, target, flags):
@@ -310,7 +346,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["ntfs.bin", "xfs.bin"])
         self.assertTrue(calls)
         self.assertNotIn(0, calls)
-        self.assertEqual(self.files.reserved, {})
+        self.assertEqual((self.files.reserved, self.files.active), ({}, {}))
 
     def test_bad_names_and_existing_targets_fail_before_body(self):
         reader = CountingReader(b"x" * 1000)
@@ -329,6 +365,24 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual([p.name for p in self.root.iterdir()], ["IMG.mov"])
         self.assertEqual((self.root / "IMG.mov").read_bytes(), b"orig")
 
+    def test_ntfs_existence_check_ignores_case(self):
+        (self.root / "report.pdf").write_bytes(b"orig")
+        reader = CountingReader(b"x" * 10)
+        self.share["fs"] = "ntfs"
+        for name in ("Report.PDF", "REPORT.pdf"):
+            with self.assertRaises(g.ApiError) as raised:
+                self.files.check_upload("family", name, 10)
+            self.assertEqual(raised.exception.code, "already_exists")
+            status, _, body = self.request("PUT", "/v1/file?" + urlencode({"share": "family", "path": name}), body=b"x" * 10, headers=OCTET)
+            self.assertEqual((status, json.loads(body)["error"]), (409, "already_exists"))
+        with self.assertRaises(g.ApiError) as raised:
+            self.files.upload("family", "Report.PDF", reader, 10)
+        self.assertEqual((raised.exception.code, reader.consumed), ("already_exists", 0))
+        self.files.check_upload("family", "report2.pdf", 10)
+        self.share["fs"] = "ext4"
+        self.files.check_upload("family", "Report.PDF", 10)
+        self.assertEqual([p.name for p in self.root.iterdir()], ["report.pdf"])
+
     def test_listing_hides_unaddressable_and_failing_entries(self):
         (self.root / "ok.txt").write_bytes(b"ok")
         (self.root / "a\\b.txt").write_bytes(b"x")
@@ -338,18 +392,31 @@ class GatewayTests(unittest.TestCase):
         (self.root / "link").symlink_to(self.root / "ok.txt")
         os.mkfifo(self.root / "fifo")
         (self.root / "lost+found").mkdir()
+        (self.root / "private").mkdir()
+        (self.root / "sub/lost+found").mkdir(parents=True)
         self.stat_errors["bad.docx"] = OSError(errno.EIO, "I/O error")
         real_access = os.access
         def access(path, mode, **kwargs):
-            return path != "lost+found" and real_access(path, mode, **kwargs)
+            return path not in {"lost+found", "private"} and real_access(path, mode, **kwargs)
         with patch.object(g.os, "access", side_effect=access):
             status, _, body = self.request("GET", "/v1/list?share=family&path=")
+            sub = self.files.listing("family", "sub")
         listing = json.loads(body)
-        self.assertEqual((status, [e["name"] for e in listing["entries"]]), (200, ["ok.txt"]))
-        self.assertEqual((listing["hidden"], listing["truncated"], listing["total"], listing["writable"]), (4, False, 1, True))
+        self.assertEqual((status, [e["name"] for e in listing["entries"]]), (200, ["sub", "ok.txt"]))
+        # The root's lost+found is skipped silently; 'private' and a nested lost+found still count.
+        self.assertEqual((listing["hidden"], listing["truncated"], listing["total"], listing["writable"]), (4, False, 2, True))
+        self.assertEqual((sub["entries"], sub["hidden"]), ([], 1))
         self.stat_errors["ok.txt"] = PermissionError(errno.EACCES, "denied")
         status, _, body = self.request("GET", "/v1/list?share=family&path=")
         self.assertEqual((status, json.loads(body)["error"]), (403, "access_denied"))
+
+    def test_fresh_ext4_root_reports_nothing_hidden(self):
+        # mkfs.ext4 leaves lost+found root:root 0700 even with -E root_owner.
+        (self.root / "lost+found").mkdir(mode=0o700)
+        real_access = os.access
+        with patch.object(g.os, "access", side_effect=lambda path, mode, **kw: path != "lost+found" and real_access(path, mode, **kw)):
+            listing = self.files.listing("family", "")
+        self.assertEqual((listing["entries"], listing["hidden"], listing["total"]), ([], 0, 0))
 
     def test_read_and_write_permission_errors_are_distinct(self):
         (self.root / "locked").mkdir()
@@ -395,7 +462,6 @@ class GatewayTests(unittest.TestCase):
             return status, response.get("Connection"), json.loads(body)["error"]
         with patch.object(g.os, "fstatvfs", return_value=types.SimpleNamespace(f_bavail=0, f_frsize=4096)):
             self.assertEqual(put(), (507, "close", "disk_full"))
-        self.assertEqual(put(Authorization="Bearer wrong"), (401, "close", "unauthorized"))
         for _ in range(2):
             self.server.upload_slots.acquire()
         try:
@@ -407,6 +473,43 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(put("What?.mov"), (400, "close", "invalid_name"))
         self.share.update(fs="apfs", mode="ro")
         self.assertEqual(put(), (403, "close", "read_only"))
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def wait_for_no_peers(self):
+        deadline = time.monotonic() + 3
+        while self.server.peers and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.server.peers, {})
+
+    def test_drain_deadline_is_wall_clock(self):
+        self.cfg["maxUploadBytes"] = 16 * 1024**2
+        (self.root / "taken").write_bytes(b"x")
+        with patch.object(g, "DRAIN_DEADLINE", 1), socket.create_connection(("127.0.0.1", self.port), timeout=3) as sock:
+            sock.sendall(put_head(self.port, "taken", 8 * 1024**2))
+            self.assertTrue(sock.recv(65536).startswith(b"HTTP/1.1 409 "))
+            # One byte at a time never fills a 256 KiB read; the deadline must still end the drain.
+            start, closed = time.monotonic(), False
+            while not closed and time.monotonic() - start < 4:
+                try:
+                    sock.send(b"z")
+                    if select.select([sock], [], [], 0.2)[0]:
+                        closed = sock.recv(65536) == b""
+                except OSError:
+                    closed = True
+            self.assertTrue(closed)
+            self.assertLess(time.monotonic() - start, 2.5)
+        self.wait_for_no_peers()
+        self.assertEqual((self.root / "taken").read_bytes(), b"x")
+
+    def test_unauthenticated_put_is_not_drained(self):
+        self.cfg["maxUploadBytes"] = 16 * 1024**2
+        with socket.create_connection(("127.0.0.1", self.port), timeout=1) as sock:
+            sock.sendall(put_head(self.port, "x.bin", 8 * 1024**2, auth=False))
+            # No body is sent: the server must answer and close without waiting for one.
+            response = read_all(sock)
+        self.assertTrue(response.startswith(b"HTTP/1.1 401 "))
+        self.assertIn(b'"unauthorized"', response)
+        self.wait_for_no_peers()
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_upload_check_reports_each_pre_body_error_without_writing(self):
@@ -555,29 +658,44 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("KeyError", stderr.getvalue())
         self.assertEqual(self.request("GET", "/v1/status")[0], 200)
 
-    def test_sigterm_during_upload_removes_staging_and_exits_cleanly(self):
+    def launch(self, grace=5, fsync_delay=0):
         cfg = dict(self.cfg, maxUploadBytes=8 * 1024**2)
-        proc = subprocess.Popen([sys.executable, "-c", LAUNCHER, str(self.mounts), json.dumps(cfg)], text=True,
-                                cwd=Path(g.__file__).resolve().parents[1], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen([sys.executable, "-c", LAUNCHER, str(self.mounts), json.dumps(cfg), str(grace), str(fsync_delay)],
+                                text=True, cwd=Path(g.__file__).resolve().parents[1], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(proc.stderr.close)
         self.addCleanup(proc.stdout.close)
         self.addCleanup(proc.kill)
-        port = int(proc.stdout.readline())
-        head = (f"PUT /v1/file?share=family&path=movie.mov HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: {ORIGIN}\r\n"
-                f"Authorization: Bearer {TOKEN}\r\nX-FD-Family: {FAMILY}\r\nContent-Type: application/octet-stream\r\n"
-                f"Content-Length: {4 * 1024**2}\r\n\r\n")
+        return proc, int(proc.stdout.readline())
+
+    def wait_for_staging(self, size):
+        deadline = time.monotonic() + 5
+        while not any(p.stat().st_size >= size for p in self.root.glob(g.STAGING + "*")) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(list(self.root.glob(g.STAGING + "*")))
+
+    def test_sigterm_during_plain_http_upload_answers_503_and_removes_staging(self):
+        # Plain HTTP only: over TLS the stop() read shutdown kills the session and the client sees a reset.
+        proc, port = self.launch()
         with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
-            sock.sendall(head.encode() + b"x" * 1024**2)
-            deadline = time.monotonic() + 5
-            while not any(p.stat().st_size for p in self.root.glob(g.STAGING + "*")) and time.monotonic() < deadline:
-                time.sleep(0.02)
-            self.assertTrue(list(self.root.glob(g.STAGING + "*")))
+            sock.sendall(put_head(port, "movie.mov", 4 * 1024**2) + b"x" * 1024**2)
+            self.wait_for_staging(1)
             proc.send_signal(signal.SIGTERM)
             self.assertEqual(proc.wait(timeout=15), 0, proc.stderr.read())
             response = read_all(sock)
         self.assertIn(b" 503 ", response.split(b"\r\n")[0])
         self.assertIn(b'"shutting_down"', response)
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_sigterm_during_fsync_leaves_no_staging(self):
+        # The whole body has arrived and the disk is still writing it back when the stop grace ends.
+        proc, port = self.launch(grace=0.5, fsync_delay=3)
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+            sock.sendall(put_head(port, "movie.mov", 1024**2) + b"x" * 1024**2)
+            self.wait_for_staging(1024**2)
+            proc.send_signal(signal.SIGTERM)
+            self.assertEqual(proc.wait(timeout=15), 0, proc.stderr.read())
+        self.assertEqual(list(self.root.glob(g.STAGING + "*")), [])
+        self.assertIn([p.name for p in self.root.iterdir()], ([], ["movie.mov"]))
 
     def test_free_space_reserve_and_nested_file(self):
         (self.root / "folder").mkdir()
