@@ -1,4 +1,4 @@
-# Omarchy NAS 0.2.0
+# Omarchy NAS 0.3.0
 
 把 USB 硬盘柜接到运行 Omarchy 的电脑，用已有数据卷提供家庭 SMB 共享。
 这是独立社区扩展，不依赖未公开的 Omarchy 插件 API。
@@ -121,7 +121,7 @@ sudo python3 ~/Downloads/omarchy-nas.pyz upgrade   # 安装新版本程序并重
 暂停或移除共享时，本插件自己的 Samba 进程会重启，其他共享的连接也会短暂断开。先结束传输。
 只有卸载成功后再拔 USB；一块盘若有多个登记卷，先逐个暂停。忙碌导致卸载失败时不会强制/懒卸载，也不会声称可拔出。
 重新插入后默认每 20 秒尝试恢复**仍处于启用状态**的已登记卷。主动暂停的卷需要 `resume`，不会自行恢复。
-突然断线造成的陈旧挂载会报告“陈旧挂载”错误，不强行卸载；APFS 按挂载时的实际设备节点核验，拔插后不会被误判为在线。先 `pause` 再 `resume`，或正常重启后恢复。
+突然断线造成的陈旧挂载会报告“陈旧挂载”错误并给出 `pause` / `resume` 命令，不强行卸载；ext4/XFS 按设备号、APFS 按挂载时的实际设备节点核验，拔插后不会被误判为在线。先 `pause` 再 `resume`，或正常重启后恢复。
 
 默认服务已占 8787 时，不需要再次执行 `serve`，直接打开管理页。临时额外页面可用 `serve --port 8788`。
 
@@ -139,7 +139,7 @@ sudo python3 ~/Downloads/omarchy-nas.pyz upgrade   # 安装新版本程序并重
 - FD 网关：`omarchy-nas-gateway.service`，配置 `/etc/omarchy-nas/gateway.json`，配对后启用家庭 HTTPS 端口 8789；`stop` / `start` 一并管理该服务。
 
 不修改 `/etc/fstab`、现有 `/etc/samba/smb.conf`、用户 sudoers 或防火墙。Omarchy 默认启用 UFW 并拒绝入站，需要手动只对家庭网段放行 445（SMB）和 8789（FD 网关），`doctor` 和 `gateway-init` 会给出命令。检测到已有 Samba 服务会停止本次设置，不抢占。
-Samba 只绑定登记家庭 IPv4 网段内的本机地址（`interfaces = lo <家庭网段>`），不监听公网 IPv6。网关与状态页服务使用 systemd 沙箱（ProtectHome、ProtectSystem=full、PrivateTmp 等），不能访问家目录和 docker.sock。
+Samba 只监听本机回环和登记的家庭网卡（`interfaces = lo <网卡>`，`bind interfaces only = yes`），并且只接受 127.0.0.1 和登记家庭 IPv4 网段的连接，其他来源（包括公网 IPv6）一律拒绝。网关与状态页服务使用 systemd 沙箱（ProtectHome、ProtectSystem=full、PrivateTmp 等），不能访问家目录和 docker.sock。
 只在第一次手动登记后自动挂载该卷；不会把新插入的所有设备自动公开。
 UUID/PARTUUID、容量、文件系统和可用的硬盘序列号一起检查。克隆造成的重复 UUID 会被拒绝。
 空挂载点设为 root 所有的 000 权限，且 Samba 每次新连接都核验真实挂载；外链/符号链接不跟随。
