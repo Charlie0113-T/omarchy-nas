@@ -27,6 +27,13 @@ function render(data) {
   byId("capacity").textContent = human(data.shares.reduce((sum,s)=>sum+s.size,0));
   byId("service-state").textContent = data.service_active ? "共享服务运行中" : "共享服务未启动";
   byId("errors").replaceChildren(...data.errors.map(e=>el("div", "notice", e)));
+  const cert = data.gateway_certificate, gateway = byId("gateway"); gateway.hidden = !cert;
+  if (cert) {
+    const soon = cert.days_left < 30, date = new Date(cert.not_after*1000).toLocaleDateString("zh-CN");
+    gateway.className = soon ? "notice" : "notice calm";
+    gateway.replaceChildren(el("span", "", !soon ? `FD 网关证书有效期至 ${date}（剩 ${cert.days_left} 天）。` : cert.days_left < 0 ? `FD 网关证书已于 ${date} 到期，FD 无法连接 NAS。续期不改配对。` : `FD 网关证书剩 ${cert.days_left} 天（${date} 到期），到期后 FD 无法连接 NAS。续期不改配对。`));
+    if (soon) gateway.append(button("续期命令 ↗", ()=>command("续期网关证书", "用原 CA 只更换服务器证书并重启网关；家庭凭据和 pairing.json 不变，设备无需重新导入。", "sudo omarchy-nas gateway-renew")));
+  }
   const shares = byId("shares"); shares.replaceChildren();
   if (!data.shares.length) { const empty = el("div", "empty"); empty.append(el("strong", "", "接入第一块数据盘"), el("p", "", "将 USB 硬盘柜接到主机，然后运行设置向导。选择磁盘、家庭网络和访问密码。"), button("查看设置命令 →", ()=>command("开始设置", "在下载文件的目录运行。向导会先显示具体设备和共享模式，再要求确认。", data.configured ? "sudo omarchy-nas add" : "python3 ~/Downloads/omarchy-nas.pyz setup"))); shares.append(empty); }
   else data.shares.forEach(s=>shares.append(shareCard(s)));

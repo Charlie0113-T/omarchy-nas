@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import ipaddress
 import json
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import stat
 import subprocess
 import tempfile
@@ -21,6 +23,27 @@ PRIVATE = tuple(ipaddress.ip_network(x) for x in ("10.0.0.0/8", "172.16.0.0/12",
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SERVICE = "omarchy-nas-smb.service"
 PYTHON = "/usr/bin/python3"
+UFW = Path("/etc/ufw/ufw.conf")
+# Defence in depth for the LAN gateway and the desktop-user panel. Keeps /srv, /dev and
+# /sys visible: verify_mount resolves /dev/disk/by-* and lsblk reads sysfs.
+HARDENING = """NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+ProtectHome=yes
+ProtectSystem=full
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+InaccessiblePaths=-/run/docker.sock
+LimitNOFILE=1024
+TasksMax=256
+"""
 
 
 class NasError(Exception):
@@ -283,8 +306,13 @@ def mount_command(share, device, cfg, p=P):
     if fs == "apfs":
         if mode != "ro":
             raise NasError("拒绝 APFS 写入")
+        # apfs-fuse records its device argument as the mount source. Pass the kernel node, not the
+        # by-id link, so a stale daemon left by a replug cannot pass verify_mount via a re-pointed link.
+        node = os.path.realpath(device["path"])
+        if os.path.realpath(source) != node:
+            raise NasError(f"{source} 未指向登记的设备 {device['path']}；拒绝挂载")
         opts += ["allow_other", "default_permissions", "subtype=omarchy-apfs", f"uid={cfg['uid']}", f"gid={cfg['gid']}"]
-        return ["apfs-fuse", "-v", str(share.get("volume", 0)), "-o", ",".join(opts), source, target]
+        return ["apfs-fuse", "-v", str(share.get("volume", 0)), "-o", ",".join(opts), node, target]
     if mode == "ro":
         opts += {"ext4": ["noload"], "xfs": ["norecovery"]}.get(fs, [])
     if fs in {"ntfs", "exfat", "vfat"}:
@@ -303,7 +331,9 @@ def mount_info(target):
     if out.returncode:
         raise NasError("读取挂载表失败：" + out.stderr.strip())
     entries = json.loads(out.stdout).get("filesystems", [])
-    return entries[0] if len(entries) == 1 else None
+    if len(entries) > 1 or any(e.get("children") for e in entries):
+        raise NasError(f"挂载点 {target} 存在多层挂载，需人工检查；未改动任何目录")
+    return entries[0] if entries else None
 
 
 def verify_mount(share, device, p=P):
@@ -325,11 +355,56 @@ def verify_mount(share, device, p=P):
     return info
 
 
-def ensure_mounted(share, cfg, devices, p=P):
+def probe(target, name):
+    # A FUSE daemon whose disk vanished still owns the mount; report that, not a permission error.
+    try:
+        os.statvfs(target)
+        with os.scandir(target) as entries:
+            next(entries, None)
+    except OSError as e:
+        if e.errno in {errno.ENOTCONN, errno.EIO}:
+            raise NasError(f"陈旧挂载：{name} 的磁盘已断开或重新接入（{e.strerror}）。请先 sudo omarchy-nas pause {name} 再 resume {name}。") from e
+        raise
+
+
+def user_access(cfg, target, mode):
+    # Check actual filesystem access as the SMB user, without writing test files.
+    check = "import os,sys; p=sys.argv[1]; required=os.R_OK|os.X_OK; required|=os.W_OK if sys.argv[2]=='rw' else 0; sys.exit(0 if os.access(p,required) else 1)"
+    return run(["runuser", "-u", cfg["user"], "--", PYTHON, "-c", check, str(target), mode], check=False).returncode == 0
+
+
+def claim_root(target, cfg):
+    # Only a fresh ext4/XFS root (mkfs leaves root:root 0755 plus lost+found); never recursive.
+    fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if set(os.listdir(fd)) - {"lost+found"}:
+            return False
+        os.fchown(fd, cfg["uid"], cfg["gid"])
+        os.fchmod(fd, 0o700)
+        return True
+    finally:
+        os.close(fd)
+
+
+def root_remedy(share, cfg, device, refused):
+    owner = f"{cfg['uid']}:{cfg['gid']}"
+    lines = [f"新建的 {share['fs']} 卷根目录默认属于 root。一次性处理，只改卷根目录本身，不递归：",
+             "· 卷根目录除 lost+found 外已有内容，--claim-root 未做任何修改。" if refused else
+             "· 卷内只有 lost+found：重新运行同一命令并加 --claim-root。",
+             f"· 已有数据：sudo mount {device['path']} /mnt && sudo chown {owner} /mnt && sudo chmod 0700 /mnt && sudo umount /mnt，然后重试。"]
+    if share["fs"] == "ext4":
+        lines.append(f"· 以后新建上传分区时直接指定所有者：sudo mkfs.ext4 -E root_owner={owner} <新分区>（会清空该分区，只用于空白新分区）。")
+    return "\n".join(lines)
+
+
+def ensure_mounted(share, cfg, devices, p=P, *, claim=False):
     d = match_device(share, devices)
     target = p.mounts / share["name"]
     existing = mount_info(target)
     if not existing:
+        # Only chmod a placeholder that findmnt reports unmounted and that is not itself a mount root.
+        if target.exists() and os.lstat(target).st_dev != os.lstat(target.parent).st_dev:
+            raise NasError(f"{target} 已是其他文件系统的挂载根目录，需人工检查；未改动权限")
         secure_dir(target, 0o000)
         if any(target.iterdir()):
             raise NasError("挂载目录非空，拒绝隐藏已有文件")
@@ -354,11 +429,15 @@ def ensure_mounted(share, cfg, devices, p=P):
                         detail = "\n" + "\n".join(clean(line) for line in log.stdout.splitlines())
                 raise NasError(str(e) + detail) from e
         verify_mount(share, d, p)
-        # Check actual filesystem access as the SMB user, without writing test files.
-        check = "import os,sys; p=sys.argv[1]; required=os.R_OK|os.X_OK; required|=os.W_OK if sys.argv[2]=='rw' else 0; sys.exit(0 if os.access(p,required) else 1)"
-        accessible = run(["runuser", "-u", cfg["user"], "--", PYTHON, "-c", check, str(target), share["mode"]], check=False)
-        if accessible.returncode:
-            raise NasError(f"用户 {cfg['user']} 没有卷根目录所需的{'读写' if share['mode'] == 'rw' else '读取'}权限；原有文件权限保持不变。")
+        probe(target, share["name"])
+        if not user_access(cfg, target, share["mode"]):
+            native = share["mode"] == "rw" and share["fs"] in {"ext4", "xfs"}
+            claimed = native and claim and claim_root(target, cfg)
+            if not (claimed and user_access(cfg, target, share["mode"])):
+                message = f"用户 {cfg['user']} 没有卷根目录所需的{'读写' if share['mode'] == 'rw' else '读取'}权限；"
+                if claimed:
+                    raise NasError(message + "卷根目录已改为该用户所有（0700，未递归），仍无法访问，需人工检查挂载选项。")
+                raise NasError(message + "原有文件权限保持不变。" + ("\n" + root_remedy(share, cfg, d, claim) if native else ""))
     except Exception:
         if not existing:
             with contextlib.suppress(NasError):
@@ -372,7 +451,7 @@ def smb_config(cfg, p=P):
     lines = ["# Managed by Omarchy NAS. Existing /etc/samba/smb.conf is untouched.", "[global]",
              "server role = standalone server", "security = user", "map to guest = Never",
              "server min protocol = SMB3_00", "smb encrypt = required", "smb ports = 445",
-             "disable netbios = yes", f"interfaces = lo {cfg['interface']}", "bind interfaces only = yes",
+             "disable netbios = yes", f"interfaces = lo {cfg['network']}", "bind interfaces only = yes",
              f"hosts allow = 127.0.0.1 {cfg['network']}", "hosts deny = ALL",
              "load printers = no", "printing = bsd", "printcap name = /dev/null", "disable spoolss = yes",
              f"private dir = {p.data}/private", f"state directory = {p.data}/state",
@@ -425,6 +504,7 @@ def guard(name, p=P):
         raise NasError("共享未启用")
     d = match_device(matches[0], inventory(p=p))
     verify_mount(matches[0], d, p)
+    probe(p.mounts / name, name)
 
 
 def prepare_paths(p=P):
@@ -485,14 +565,28 @@ User={cfg['user']}
 ExecStart={app} serve --no-browser
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
-CapabilityBoundingSet=
-AmbientCapabilities=
-RestrictSUIDSGID=true
-
+{HARDENING}
 [Install]
 WantedBy=multi-user.target
 """}
+
+
+def cert_expiry(path):
+    out = run(["openssl", "x509", "-noout", "-enddate", "-in", str(path)])
+    return ssl.cert_time_to_seconds(out.stdout.strip().removeprefix("notAfter="))
+
+
+def ufw_enabled(path=None):
+    try:
+        lines = (path or UFW).read_text().splitlines()
+    except OSError:
+        return None
+    return any(line.replace('"', "").strip() == "ENABLED=yes" for line in lines)
+
+
+def firewall_commands(network, address):
+    # Printed for the admin only; this tool never changes the firewall.
+    return [f"sudo ufw allow from {network} to {address} port {port} proto tcp" for port in (8789, 445)]
 
 
 def human_size(size):

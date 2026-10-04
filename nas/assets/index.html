@@ -8,6 +8,7 @@
     <header><div><div class="eyebrow">YOUR HOME, CONNECTED</div><h1>存储总览<span class="title-dot">.</span></h1><p class="subtitle" id="host">正在读取本机状态…</p></div><button id="refresh" class="button outline">刷新状态 <span aria-hidden="true">↻</span></button></header>
     <div id="demo-banner" class="notice" hidden>演示模式 · 页面中的设备、容量和连接地址均为示例，不代表你的机器已接通。</div>
     <div id="errors" role="status"></div>
+    <div id="gateway" class="notice" hidden></div>
     <section class="summary" aria-label="存储概览"><div><span class="label">在线共享</span><strong id="count">—</strong><small id="service-state">读取中</small></div><div><span class="label">已登记容量</span><strong id="capacity">—</strong><small>卷容量总和，不代表剩余空间</small></div><div><span class="label">访问方式</span><strong class="protocol">SMB 3</strong><small>密码登录 · 连接加密</small></div></section>
     <section class="section"><div class="section-head"><div><h2>共享空间</h2><p>查看连接地址，或管理已登记的磁盘卷。</p></div><span class="pill neutral">家庭网络</span></div><div id="shares" class="shares"></div></section>
     <section class="section"><div class="section-head"><div><h2>已发现的磁盘</h2><p>自动识别设备；首次共享时选择要接入的卷。</p></div><button class="text-button" id="doctor">查看诊断命令 ↗</button></div><div id="devices" class="devices"></div></section>

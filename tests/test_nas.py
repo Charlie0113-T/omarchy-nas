@@ -1,11 +1,16 @@
 import copy
 import contextlib
+import errno
 import http.client
+import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -29,6 +34,19 @@ def config(fs="apfs", mode="ro"):
             "interface": "eth0", "network": "192.168.1.0/24", "shares": [{
                 "name": "family", "id_type": "uuid", "id": "usb-333", "fs": fs,
                 "size": 12*10**12-100, "serial": "disk-serial", "mode": mode, "enabled": True, "volume": 0}]}
+
+
+def result(returncode=0, stdout=""):
+    return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+
+BY_UUID = "/dev/disk/by-uuid/usb-333"
+real_realpath = os.path.realpath
+
+
+def udev(node="/dev/sdc2"):
+    # The container has no /dev/disk/by-uuid; model udev pointing the link at `node`.
+    return patch.object(c.os.path, "realpath", side_effect=lambda path, *a, **k: node if path == BY_UUID else real_realpath(path, *a, **k))
 
 
 class DetectionTests(unittest.TestCase):
@@ -162,12 +180,13 @@ class MountTests(unittest.TestCase):
             p = c.Paths(mounts=Path(tmp))
             target = Path(tmp) / "family"; target.mkdir()
             cfg = config()
-            with patch.object(c, "mount_info", return_value=None), patch.object(c, "secure_dir"), patch.object(c, "verify_mount"), \
+            with patch.object(c, "mount_info", return_value=None), patch.object(c, "secure_dir"), patch.object(c, "verify_mount"), udev(), \
                  patch.object(c, "tool", return_value="/usr/bin/apfs-fuse"), patch.object(c, "run", return_value=types.SimpleNamespace(returncode=0)) as run:
                 c.ensure_mounted(cfg["shares"][0], cfg, c.inventory(fixture(), p=p), p)
             args = run.call_args_list[0].args[0]
             self.assertEqual(args[0], "systemd-run")
             self.assertIn("--property=Type=forking", args)
+            self.assertEqual(args[-2:], ["/dev/sdc2", str(target)])
 
     def test_permission_failure_unmounts_new_volume(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -180,6 +199,111 @@ class MountTests(unittest.TestCase):
             with patch.object(c,"mount_info",return_value=None), patch.object(c,"secure_dir"), patch.object(c,"verify_mount"), patch.object(c,"run",side_effect=fail_permission):
                 with self.assertRaises(c.NasError): c.ensure_mounted(cfg["shares"][0],cfg,c.inventory(fixture("ext4")),p)
             self.assertEqual(calls[-1][0],"umount")
+
+    def mount_new(self, fs, mode, access, *, claim=False, contents=("lost+found",)):
+        # Mount, verify and access are simulated; the volume root is a real temp directory.
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        p = c.Paths(mounts=Path(tmp.name)); target = Path(tmp.name) / "family"; target.mkdir()
+        cfg, codes, self.calls = config(fs, mode), iter(access), []
+        def fake_run(args, **kwargs):
+            self.calls.append(args)
+            if args[0] in {"mount", "systemd-run"}:
+                for name in contents:
+                    (target / name).mkdir()
+            return result(next(codes) if args[0] == "runuser" else 0)
+        with patch.object(c, "mount_info", return_value=None), patch.object(c, "secure_dir"), patch.object(c, "verify_mount"), udev(), \
+             patch.object(c, "tool", side_effect=lambda name: "/usr/bin/" + name), \
+             patch.object(c, "run", side_effect=fake_run), patch.object(c.os, "fchown") as chown, patch.object(c.os, "fchmod") as chmod:
+            try:
+                return c.ensure_mounted(cfg["shares"][0], cfg, c.inventory(fixture(fs)), p, claim=claim)
+            finally:
+                self.chown, self.chmod = chown, chmod
+
+    def test_rw_ext4_root_not_writable_gives_actionable_error(self):
+        with self.assertRaises(c.NasError) as raised:
+            self.mount_new("ext4", "rw", [1])
+        message = str(raised.exception)
+        for part in ("--claim-root", "sudo chown 1000:1000 /mnt", "chmod 0700", "mkfs.ext4 -E root_owner=1000:1000", "不递归"):
+            self.assertIn(part, message)
+        self.assertEqual(self.calls[-1][0], "umount")
+        self.chown.assert_not_called()
+
+    def test_claim_root_changes_only_an_empty_fresh_root(self):
+        for fs in ("ext4", "xfs"):
+            with self.subTest(fs=fs):
+                self.mount_new(fs, "rw", [1, 0], claim=True)
+                self.chown.assert_called_once()
+                self.assertEqual(self.chown.call_args.args[1:], (1000, 1000))
+                self.chmod.assert_called_once()
+                self.assertEqual(self.chmod.call_args.args[1:], (0o700,))
+                self.assertNotIn("umount", [call[0] for call in self.calls])
+
+    def test_claim_root_refuses_a_root_with_data(self):
+        with self.assertRaisesRegex(c.NasError, "未做任何修改"):
+            self.mount_new("ext4", "rw", [1], claim=True, contents=("lost+found", "photos"))
+        self.chown.assert_not_called(); self.chmod.assert_not_called()
+        self.assertEqual(self.calls[-1][0], "umount")
+        with self.assertRaisesRegex(c.NasError, "仍无法访问"):
+            self.mount_new("xfs", "rw", [1, 1], claim=True, contents=())
+        self.chown.assert_called_once()
+
+    def test_claim_root_never_applies_to_apfs_or_readonly(self):
+        with self.assertRaises(c.NasError) as raised:
+            self.mount_new("ext4", "ro", [1], claim=True)
+        self.chown.assert_not_called()
+        self.assertNotIn("--claim-root", str(raised.exception))
+        device = c.inventory(fixture())[-1]
+        for fs, writable in (("apfs", False), ("ext4", False), ("exfat", True)):
+            with self.subTest(fs=fs), self.assertRaisesRegex(c.NasError, "--claim-root"):
+                cli.enroll({**device, "fs": fs}, types.SimpleNamespace(name="family", writable=writable, apfs_volume=0, claim_root=True), config())
+
+    def test_stale_apfs_mount_after_replug_is_rejected(self):
+        data = fixture(); data["blockdevices"][1]["children"][0].update(name="/dev/sdd2", **{"maj:min": "8:50"})
+        dev = c.inventory(data)[-1]
+        info = {"fstype": "fuse.omarchy-apfs", "source": "/dev/sdc2", "options": "ro,nosuid,nodev,noexec"}
+        with udev("/dev/sdd2"), patch.object(c, "mount_info", return_value=info), self.assertRaisesRegex(c.NasError, "FUSE"):
+            c.verify_mount(config()["shares"][0], dev)
+
+    def test_apfs_mount_command_uses_resolved_node(self):
+        cfg = config(); dev = c.inventory(fixture())[-1]
+        with udev("/dev/sdc2"):
+            self.assertEqual(c.mount_command(cfg["shares"][0], dev, cfg)[-2], "/dev/sdc2")
+        with udev("/dev/sdd2"), self.assertRaisesRegex(c.NasError, "拒绝挂载"):
+            c.mount_command(cfg["shares"][0], dev, cfg)
+
+    def test_dead_fuse_mount_reports_stale_not_permission(self):
+        with patch.object(c.os, "statvfs", side_effect=OSError(errno.ENOTCONN, "Transport endpoint is not connected")):
+            with self.assertRaises(c.NasError) as raised:
+                self.mount_new("apfs", "ro", [0])
+        self.assertIn("陈旧挂载", str(raised.exception))
+        self.assertIn("pause family", str(raised.exception))
+        self.assertNotIn("权限", str(raised.exception))
+        self.assertNotIn("runuser", [call[0] for call in self.calls])
+
+    def test_stacked_mounts_are_reported_not_chmodded(self):
+        stacked = json.dumps({"filesystems": [{"target": "/srv/omarchy-nas/family", "source": "/dev/sdc2"},
+                                              {"target": "/srv/omarchy-nas/family", "source": "/dev/sdd1"}]})
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(mounts=Path(tmp)); (Path(tmp) / "family").mkdir()
+            with patch.object(c, "run", return_value=result(0, stacked)), patch.object(c, "secure_dir") as secure:
+                with self.assertRaisesRegex(c.NasError, "多层挂载"):
+                    c.ensure_mounted(config("ext4", "rw")["shares"][0], config("ext4", "rw"), c.inventory(fixture("ext4")), p)
+            secure.assert_not_called()
+        for out in (result(1), result(0, '{"filesystems": []}')):
+            with patch.object(c, "run", return_value=out):
+                self.assertIsNone(c.mount_info("/srv/omarchy-nas/family"))
+
+    def test_unreported_mount_root_is_not_chmodded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(mounts=Path(tmp)); target = Path(tmp) / "family"; target.mkdir()
+            real_lstat = os.lstat
+            def lstat(path, *args, **kwargs):
+                info = real_lstat(path, *args, **kwargs)
+                return os.stat_result([*info[:2], info.st_dev + 1, *info[3:]]) if Path(path) == target else info
+            with patch.object(c, "mount_info", return_value=None), patch.object(c.os, "lstat", side_effect=lstat), \
+                 patch.object(c, "secure_dir") as secure, self.assertRaisesRegex(c.NasError, "挂载根目录"):
+                c.ensure_mounted(config("ext4", "rw")["shares"][0], config("ext4", "rw"), c.inventory(fixture("ext4")), p)
+            secure.assert_not_called()
 
 
 class ServiceTests(unittest.TestCase):
@@ -234,6 +358,110 @@ class ServiceTests(unittest.TestCase):
             target=Path(tmp)/"real"; target.mkdir(); link=Path(tmp)/"link"; link.symlink_to(target)
             with patch.object(c.os,"geteuid",return_value=1000), self.assertRaises(c.NasError): c.secure_dir(link)
 
+    def test_smb_binds_only_home_ipv4_network(self):
+        out = c.smb_config(config())
+        self.assertIn("interfaces = lo 192.168.1.0/24\n", out)
+        self.assertNotIn("interfaces = lo eth0", out)
+        self.assertIn("bind interfaces only = yes", out)
+        self.assertIn("hosts allow = 127.0.0.1 192.168.1.0/24", out)
+
+    def test_panel_unit_is_sandboxed_without_hiding_devices(self):
+        panel = c.unit_files(config())["omarchy-nas-panel.service"]
+        for line in ("ProtectHome=yes", "ProtectSystem=full", "PrivateTmp=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes",
+                     "ProtectControlGroups=yes", "RestrictNamespaces=yes", "LockPersonality=yes", "RestrictRealtime=yes",
+                     "SystemCallArchitectures=native", "InaccessiblePaths=-/run/docker.sock", "LimitNOFILE=1024", "TasksMax=256", "NoNewPrivileges=true"):
+            self.assertIn(line + "\n", panel)
+        for line in ("PrivateDevices", "ProtectSystem=strict", "SystemCallFilter"):
+            self.assertNotIn(line, panel)
+        self.assertIn("\n\n[Install]", panel)
+
+    def test_network_command_moves_subnet_and_keeps_shares(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(etc=Path(tmp), data=Path(tmp) / "data", run=Path(tmp) / "run")
+            cfg = config(); cfg["shares"].append({**config("ext4", "rw")["shares"][0], "name": "upload", "id": "usb-444", "enabled": False})
+            p.config.write_text(json.dumps(cfg)); (p.etc / "gateway.json").write_text("{}")
+            calls = []
+            def fake_run(args, **kwargs):
+                calls.append([str(a) for a in args]); return result()
+            load, save, write = c.load_config, c.save_config, c.write_smb
+            wlan = {"name": "wlan0", "ip": "192.168.0.23", "network": "192.168.0.0/24"}
+            with patch.object(c, "P", p), patch.object(cli, "root"), patch.object(c, "locked", return_value=contextlib.nullcontext()), \
+                 patch.object(c, "load_config", side_effect=lambda: load(p)), patch.object(c, "save_config", side_effect=lambda x: save(x, p)), \
+                 patch.object(c, "write_smb", side_effect=lambda x: write(x, p)), patch.object(c, "run", side_effect=fake_run), patch.object(c, "UFW", p.etc / "ufw.conf"), \
+                 patch.object(c, "network_interfaces", return_value=[{"name": "eth0", "ip": "10.0.0.5", "network": "10.0.0.0/24"}, wlan]), \
+                 patch("builtins.input", return_value="1"), contextlib.redirect_stdout(io.StringIO()) as out:
+                cli.renetwork(types.SimpleNamespace(interface="wlan0"))
+            saved = json.loads(p.config.read_text())
+            self.assertEqual((saved["interface"], saved["network"]), ("wlan0", "192.168.0.0/24"))
+            self.assertEqual(saved["shares"], cfg["shares"])
+            smb = p.smb.read_text()
+            self.assertIn("interfaces = lo 192.168.0.0/24", smb)
+            self.assertIn("hosts allow = 127.0.0.1 192.168.0.0/24", smb)
+            self.assertEqual(calls[0][0], "testparm")
+            self.assertIn(["systemctl", "try-restart", c.SERVICE], calls)
+            self.assertIn("gateway-init", out.getvalue()); self.assertIn("--replace", out.getvalue())
+            self.assertIn("sudo ufw allow from 192.168.0.0/24 to 192.168.0.23 port 8789 proto tcp", out.getvalue())
+
+    def test_upgrade_reinstalls_without_touching_pairing_or_tls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            p = c.Paths(etc=root / "etc", units=root / "units", app=root / "opt/omarchy-nas.pyz")
+            (p.etc / "tls").mkdir(parents=True); p.units.mkdir()
+            files = {"gateway.json": json.dumps({"bind": "192.168.1.24", "port": 8789, "tokenHash": "a" * 64, "gatewayId": "gw-1"}),
+                     "pairing.json": '{"token": "keep"}', "tls/server.crt": "sentinel", "tls/ca.key": "sentinel"}
+            for name, text in files.items():
+                (p.etc / name).write_text(text)
+            calls = []
+            def fake_run(args, **kwargs):
+                calls.append([str(a) for a in args]); return result()
+            from nas import gateway_setup
+            with patch.object(c, "P", p), patch.object(cli, "root"), patch.object(cli, "copy_app") as copy_app, \
+                 patch.object(c, "load_config", return_value=config()), patch.object(c, "prepare_paths"), patch.object(c, "write_smb") as smb, \
+                 patch.object(c, "run", side_effect=fake_run), patch.object(gateway_setup, "wait_ready") as ready, \
+                 patch.object(gateway_setup, "certificates") as certs, patch.object(gateway_setup, "initialize") as init, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                cli.upgrade()
+            copy_app.assert_called_once(); smb.assert_called_once(); certs.assert_not_called(); init.assert_not_called()
+            self.assertEqual({name: (p.etc / name).read_text() for name in files}, files)
+            self.assertIn(["systemctl", "daemon-reload"], calls)
+            self.assertIn(["systemctl", "try-restart", c.SERVICE, "omarchy-nas-panel.service"], calls)
+            self.assertIn(["systemctl", "restart", "omarchy-nas-gateway.service"], calls)
+            ready.assert_called_once_with("192.168.1.24", 8789)
+            self.assertIn("ProtectHome=yes", (p.units / "omarchy-nas-gateway.service").read_text())
+            self.assertIn("ProtectHome=yes", (p.units / "omarchy-nas-panel.service").read_text())
+
+    def test_doctor_lists_gateway_port_and_ufw_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ufw = Path(tmp) / "ufw.conf"
+            for text, state in (("ENABLED=yes\n", "UFW：已启用"), ("ENABLED=no\n", "UFW：未启用"), (None, "UFW：未检测到")):
+                if text: ufw.write_text(text)
+                else: ufw.unlink()
+                with self.subTest(state=state), patch.object(c, "UFW", ufw), patch.object(c, "inventory", return_value=[]), \
+                     patch.object(c, "network_interfaces", return_value=[{"name": "eth0", "ip": "192.168.1.24", "network": "192.168.1.0/24"}]), \
+                     patch.object(c, "load_config", return_value=config()), contextlib.redirect_stdout(io.StringIO()) as out:
+                    cli.doctor()
+                self.assertIn(state, out.getvalue())
+                self.assertIn("TCP 445", out.getvalue()); self.assertIn("TCP 8789", out.getvalue())
+                self.assertIn("sudo ufw allow from 192.168.1.0/24 to 192.168.1.24 port 8789 proto tcp", out.getvalue())
+
+    def test_status_reports_gateway_certificate_expiry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = c.Paths(etc=Path(tmp), run=Path(tmp))
+            with patch.object(c, "P", p), patch.object(c, "inventory", return_value=[]), patch.object(c, "network_interfaces", return_value=[]):
+                self.assertNotIn("gateway_certificate", web.snapshot())
+                (p.etc / "gateway.json").write_text("{}")
+                with patch.object(c, "cert_expiry", return_value=time.time() + 9.5 * 86400) as expiry:
+                    snap = web.snapshot()
+            expiry.assert_called_once_with(p.etc / "tls/server.crt")
+            self.assertEqual(snap["gateway_certificate"]["days_left"], 9)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_certificate_expiry_is_read_from_the_certificate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=Family NAS/",
+                            "-keyout", f"{tmp}/key", "-out", f"{tmp}/crt"], check=True, capture_output=True)
+            self.assertAlmostEqual(c.cert_expiry(f"{tmp}/crt"), time.time() + 30 * 86400, delta=120)
+
 
 class HttpTests(unittest.TestCase):
     @classmethod
@@ -253,6 +481,7 @@ class HttpTests(unittest.TestCase):
     def test_demo_api_is_explicitly_marked_and_assets_load(self):
         status,headers,data=self.request("/api/status")
         self.assertEqual(status,200); self.assertTrue(json.loads(data)["demo"])
+        self.assertLess(json.loads(data)["gateway_certificate"]["days_left"],30)
         for path in ("/","/app.js","/style.css"):
             status,headers,data=self.request(path)
             self.assertEqual(status,200); self.assertTrue(len(data)>100)

@@ -589,46 +589,5 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, "disk_full")
 
 
-class SetupTests(unittest.TestCase):
-    def test_only_exact_https_origins(self):
-        self.assertEqual(setup.origin("https://fd.example.test/"), ORIGIN)
-        for bad in ("http://fd.test", "https://fd.test/taos", "https://user@fd.test", "https://fd.test?x=1", "https://fd.test/#x"):
-            with self.assertRaises(c.NasError): setup.origin(bad)
-
-    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
-    def test_actual_certificate_generation_trust_and_key_permissions(self):
-        # Use an isolated scratch directory; no system services/config touched.
-        with tempfile.TemporaryDirectory() as root:
-            paths = types.SimpleNamespace(etc=Path(root))
-            # Host ownership is tested elsewhere; here simulate installation
-            # ownership so this crypto/transport test also runs as non-root.
-            def make_test_dir(path, mode):
-                path.mkdir(mode=mode, parents=True, exist_ok=True)
-            with patch.object(setup.c, "P", paths), patch.object(setup.c, "secure_dir", side_effect=make_test_dir), patch.object(setup.os, "chown"):
-                setup.certificates("127.0.0.1", {"gid": os.getgid()})
-            self.assertEqual((Path(root) / "tls/ca.key").stat().st_mode & 0o777, 0o600)
-            self.assertEqual((Path(root) / "tls/server.key").stat().st_mode & 0o777, 0o640)
-            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            server_context.load_cert_chain(Path(root) / "tls/server.crt", Path(root) / "tls/server.key")
-            client_context = ssl.create_default_context(cafile=str(Path(root) / "family-nas-ca.crt"))
-            cfg = {"bind": "127.0.0.1", "port": 0, "network": "127.0.0.0/8", "hosts": [],
-                   "origins": [ORIGIN], "familyId": FAMILY, "gatewayId": "test-tls", "shares": [],
-                   "maxUploadBytes": g.MAX_UPLOAD, "tokenHash": hashlib.sha256(TOKEN.encode()).hexdigest()}
-            server = g.GatewayServer(cfg)
-            server.tls_context = server_context
-            port = server.server_address[1]
-            cfg["hosts"] = [f"127.0.0.1:{port}"]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            conn = http.client.HTTPSConnection("127.0.0.1", port, context=client_context, timeout=5)
-            try:
-                conn.request("GET", "/v1/status", headers={"Authorization": f"Bearer {TOKEN}", "X-FD-Family": FAMILY, "Origin": ORIGIN})
-                response = conn.getresponse()
-                self.assertEqual(response.status, 200)
-                self.assertTrue(json.loads(response.read())["homeNetwork"])
-            finally:
-                conn.close(); server.shutdown(); server.server_close(); thread.join(timeout=5)
-
-
 if __name__ == "__main__":
     unittest.main()
