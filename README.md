@@ -63,7 +63,8 @@ python3 ~/Downloads/omarchy-nas.pyz serve --demo
 本版只接入 Linux 显示为 USB 或可移除的独立数据卷。硬盘柜的品牌不限，但固件、USB 桥接芯片和硬件 RAID 的兼容性没有逐一验证。
 仅提供系统能识别的卷，不代替硬件 RAID 管理工具。
 系统盘及其同盘分区被排除；已由其他程序挂载的卷需要先正常卸载。
-不处理格式化、分区、修复、自动解密、Fusion Drive 拼接、Time Machine、NFS 或公网穿透。Web 上传仅通过单独配对的家庭 HTTPS 网关向可写卷提供；APFS 不提供写入。
+程序不处理格式化、分区、修复、自动解密、Fusion Drive 拼接、Time Machine、NFS 或公网穿透。Web 上传仅通过单独配对的家庭 HTTPS 网关向可写卷提供；APFS 不提供写入。
+数据盘全是 APFS 时，可以在 Mac 上缩小 APFS 容器，再手动新建一个 ext4 上传分区，步骤与风险见 [家庭文件接入说明 · 第 0 步](../../docs/family-nas.md#0-数据盘全是-apfs-时先准备一个可写分区)。要在 `setup` 之前完成：已登记的卷按容量核对身份。
 
 ## Charles 的 APFS 硬盘柜
 
@@ -105,18 +106,22 @@ omarchy-nas status                  # 实时状态 JSON
 omarchy-nas doctor                  # 依赖 / 磁盘 / 网络诊断
 sudo omarchy-nas add                # 添加另一个外接数据卷，默认只读
 sudo omarchy-nas add --writable     # 明确请求可写共享
+sudo omarchy-nas add --writable --claim-root   # ext4/XFS 新卷：卷根目录仅此一层交给共享用户（卷须为空）
 sudo omarchy-nas pause family       # 暂停共享并正常卸载；不要在传输中使用
 sudo omarchy-nas resume family      # 重新核验并挂载
 sudo omarchy-nas remove family      # 取消登记并卸载；不删除卷内文件
 sudo omarchy-nas passwd             # 修改本插件的 NAS 密码
 sudo omarchy-nas stop               # 停用服务/自动启动并正常卸载，保留配置
 sudo omarchy-nas start              # 重新启用
+sudo omarchy-nas network            # 路由器/网段或家庭网卡变化后重新登记网络（之后需 gateway-init --replace）
+sudo omarchy-nas gateway-renew      # 续期 FD 网关服务器证书，凭据和配对不变
+sudo python3 ~/Downloads/omarchy-nas.pyz upgrade   # 安装新版本程序并重启服务，不动配对和证书
 ```
 
 暂停或移除共享时，本插件自己的 Samba 进程会重启，其他共享的连接也会短暂断开。先结束传输。
 只有卸载成功后再拔 USB；一块盘若有多个登记卷，先逐个暂停。忙碌导致卸载失败时不会强制/懒卸载，也不会声称可拔出。
 重新插入后默认每 20 秒尝试恢复**仍处于启用状态**的已登记卷。主动暂停的卷需要 `resume`，不会自行恢复。
-突然断线造成的陈旧挂载会报告错误，不强行卸载；正常重启或处理占用后再恢复。
+突然断线造成的陈旧挂载会报告“陈旧挂载”错误，不强行卸载；APFS 按挂载时的实际设备节点核验，拔插后不会被误判为在线。先 `pause` 再 `resume`，或正常重启后恢复。
 
 默认服务已占 8787 时，不需要再次执行 `serve`，直接打开管理页。临时额外页面可用 `serve --port 8788`。
 
@@ -133,7 +138,8 @@ sudo omarchy-nas start              # 重新启用
 - FUSE 瞬态服务：`omarchy-nas-volume-共享名.service`
 - FD 网关：`omarchy-nas-gateway.service`，配置 `/etc/omarchy-nas/gateway.json`，配对后启用家庭 HTTPS 端口 8789；`stop` / `start` 一并管理该服务。
 
-不修改 `/etc/fstab`、现有 `/etc/samba/smb.conf`、用户 sudoers 或防火墙。检测到已有 Samba 服务会停止本次设置，不抢占。
+不修改 `/etc/fstab`、现有 `/etc/samba/smb.conf`、用户 sudoers 或防火墙。Omarchy 默认启用 UFW 并拒绝入站，需要手动只对家庭网段放行 445（SMB）和 8789（FD 网关），`doctor` 和 `gateway-init` 会给出命令。检测到已有 Samba 服务会停止本次设置，不抢占。
+Samba 只绑定登记家庭 IPv4 网段内的本机地址（`interfaces = lo <家庭网段>`），不监听公网 IPv6。网关与状态页服务使用 systemd 沙箱（ProtectHome、ProtectSystem=full、PrivateTmp 等），不能访问家目录和 docker.sock。
 只在第一次手动登记后自动挂载该卷；不会把新插入的所有设备自动公开。
 UUID/PARTUUID、容量、文件系统和可用的硬盘序列号一起检查。克隆造成的重复 UUID 会被拒绝。
 空挂载点设为 root 所有的 000 权限，且 Samba 每次新连接都核验真实挂载；外链/符号链接不跟随。
@@ -149,11 +155,11 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 ```
 
 - 挂载点被其他程序占用：先在原程序正常卸载。
-- Linux 文件系统权限不足：已有权限会保留，程序不会递归 chown/chmod；需明确决定授权哪一个目录。首版共享的是整个卷根目录。
+- Linux 文件系统权限不足：已有权限会保留，程序不会递归 chown/chmod。首版共享的是整个卷根目录，可写卷要求共享用户能写卷根目录。新建 ext4 时用 `mkfs.ext4 -E root_owner=$(id -u):$(id -g)`；已建好的空卷（只有 `lost+found`）可在 `add --writable` 时加 `--claim-root`，只改卷根这一层。已有数据的卷请自行决定授权方式。
 - APFS 无法获取卷：检查卷编号、是否加密、是否 Fusion Drive、驱动版本；不要改用可写或 lax 模式绕过错误。
 - `testparm` 失败：旧配置保留，不启动新共享。
 - 首次 setup 中途失败且已保存 config：使用 `sudo omarchy-nas start` 恢复，不要删数据卷。
-- 连接被拒绝：检查输出的主机 IP、所选网络接口、家庭网段和防火墙；管理页的 localhost 地址不是另一台机器的文件共享地址。
+- 连接被拒绝：检查输出的主机 IP、所选网络接口、家庭网段和防火墙（`sudo ufw status`）；管理页的 localhost 地址不是另一台机器的文件共享地址。网段或网卡变了用 `sudo omarchy-nas network`。
 
 ## 验证记录 · 2026-10-04
 
@@ -163,7 +169,7 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 - 47 项自动检查：35 项磁盘、共享与状态页检查，加 12 项网关检查（真实 HTTP 文件传输、TLS 信任、来源/凭据/家庭校验、同名保护、只读与越界拦截等）。
 - 使用模拟的系统命令验证 FUSE 服务生命周期配置和失败处理；这些不是实盘挂载测试。
 
-另见 `VERIFICATION.md` 中的最终浏览器检查记录。
+页面与 FD→NAS 流程只在云端做过**模拟**浏览器检查（无头 Chromium + 真实网关代码 + 临时目录，没有真实 NAS、USB 盘、家庭网络或系统级证书信任）；真机验收尚未完成。三类结果的区分见 `VERIFICATION.md`。
 
 当前环境没有目标 USB 数据盘、systemd 主机会话和完整 Samba；无法完成真实 SMB/重启/拔插测试。
 第一次真机验收顺序：`doctor` → 默认只读 setup → Mac/iPad 登录并打开已知文件 → pause 正常卸载 → resume → 重启后检查。
