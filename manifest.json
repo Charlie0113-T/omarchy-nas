@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "roytao2025.omarchy-nas",
+  "id": "io.github.charlie0113-t.omarchy-nas",
   "name": "Omarchy NAS",
   "version": "0.1.0",
-  "author": "RoyTao2025",
+  "author": "Charles Tao",
   "license": "AGPL-3.0",
   "description": "Status of the shares that omarchy-nas serves from this machine, in the bar: which disks are online, paused or offline, with pause, resume and diagnostics one click away.",
   "kinds": [

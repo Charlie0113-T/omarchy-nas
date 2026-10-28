@@ -16,8 +16,8 @@ import "Model.js" as Model
 // password; the shell never runs sudo.
 Panel {
   id: nasWidget
-  moduleName: "roytao2025.omarchy-nas"
-  ipcTarget: "roytao2025.omarchy-nas"
+  moduleName: "io.github.charlie0113-t.omarchy-nas"
+  ipcTarget: "io.github.charlie0113-t.omarchy-nas"
   manageIpc: false
 
   readonly property var summary: nas.summary

@@ -55,8 +55,8 @@ The icon lands on the right of the bar.
 ### Update and remove
 
 ```sh
-omarchy plugin update roytao2025.omarchy-nas
-omarchy plugin remove roytao2025.omarchy-nas
+omarchy plugin update io.github.charlie0113-t.omarchy-nas
+omarchy plugin remove io.github.charlie0113-t.omarchy-nas
 ```
 
 ## 🧩 What you see
@@ -100,7 +100,7 @@ omarchy plugin remove roytao2025.omarchy-nas
 Settings sit inline on the widget's entry in `~/.config/omarchy/shell.json`, for example:
 
 ```json
-{ "id": "roytao2025.omarchy-nas", "refreshIntervalSec": 120 }
+{ "id": "io.github.charlie0113-t.omarchy-nas", "refreshIntervalSec": 120 }
 ```
 
 | Key | Default | Range | What it does |
@@ -152,7 +152,7 @@ Omarchy 4，并且同一台电脑上已经用 `omarchy-nas setup` 设置好 NAS�
 omarchy plugin add https://github.com/Charlie0113-T/omarchy_nas.git --enable
 ```
 
-图标在顶栏右侧。更新：`omarchy plugin update roytao2025.omarchy-nas`；卸载：`omarchy plugin remove roytao2025.omarchy-nas`。
+图标在顶栏右侧。更新：`omarchy plugin update io.github.charlie0113-t.omarchy-nas`；卸载：`omarchy plugin remove io.github.charlie0113-t.omarchy-nas`。
 
 ### 🧩 看到什么
 
