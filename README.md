@@ -11,7 +11,7 @@
 
 **Your omarchy-nas shares in the Omarchy bar: online, paused or offline at a glance**
 
-Omarchy 4 bar plugin · Pause, resume and diagnostics one click away · Never runs `sudo`
+Omarchy 4 bar plugin · Pause, resume and diagnostics one click away · Never runs `sudo` in the background
 
 ![version](https://img.shields.io/badge/version-0.1.0-2ea44f)
 ![platform](https://img.shields.io/badge/platform-Omarchy%204-1793D1?logo=archlinux&logoColor=white)
@@ -40,6 +40,7 @@ An [Omarchy](https://github.com/omacom/omarchy) 4 bar plugin for the machine tha
 
 - Omarchy 4: the desktop runs as omarchy-shell, which has the plugin system.
 - omarchy-nas set up on the same machine (`omarchy-nas setup`).
+- `curl` and `wl-copy`, which come with Omarchy.
 
 > [!NOTE]
 > The plugin shows this machine's NAS only. It doesn't browse shares from other computers.
@@ -132,7 +133,7 @@ node --test tests/model.test.mjs     # status logic, texts and commands
 
 Released under the [GNU Affero General Public License v3.0](LICENSE), like omarchy-nas. Copyright © 2026 Charles Tao.
 
-The Omarchy logo comes from [omacom/omarchy](https://github.com/omacom/omarchy) (MIT license). This is a community tool and is not affiliated with Omarchy.
+The Omarchy logo comes from [omacom/omarchy](https://github.com/omacom/omarchy) under the [MIT license](assets/LICENSE). This is a community tool and is not affiliated with Omarchy.
 
 ---
 
@@ -144,7 +145,7 @@ The Omarchy logo comes from [omacom/omarchy](https://github.com/omacom/omarchy) 
 
 ### 需要
 
-Omarchy 4，并且同一台电脑上已经用 `omarchy-nas setup` 设置好 NAS。插件只看本机。
+Omarchy 4，并且同一台电脑上已经用 `omarchy-nas setup` 设置好 NAS。插件只看本机。用到的 `curl` 和 `wl-copy` 是 Omarchy 自带的。
 
 ### 📦 安装
 
@@ -174,7 +175,7 @@ omarchy plugin add https://github.com/Charlie0113-T/omarchy_nas.git --enable
 
 ### 🔒 安全
 
-- 插件只读状态，从不运行 sudo。
+- 插件读状态从不用 sudo。
 
 > [!IMPORTANT]
 > 需要 root 的操作会打开终端显示完整命令，由你自己输入密码。
