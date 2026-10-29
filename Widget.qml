@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -21,7 +22,8 @@ Panel {
   manageIpc: false
 
   readonly property var summary: nas.summary
-  readonly property string language: Commons.I18n.language
+  // Omarchy 4.0 has no shell translations (I18n came with 4.5): English there.
+  readonly property string language: Commons.I18n ? Commons.I18n.language : ""
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -89,7 +91,7 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     nas.refresh()
-    Qt.callLater(function() { if (panel.loadedContent) panel.loadedContent.forceActiveFocus() })
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   Status {
@@ -104,7 +106,9 @@ Panel {
     onTriggered: nasWidget.copiedName = ""
   }
 
-  ShellIpc {
+  // Quickshell's IpcHandler rather than the shell's ShellIpc, which Omarchy 4.0
+  // doesn't have; omarchy-shell still reaches it through qs ipc.
+  IpcHandler {
     target: nasWidget.ipcTarget
     function open(): void { nasWidget.open() }
     function close(): void { nasWidget.close() }
@@ -135,13 +139,14 @@ Panel {
     owner: nasWidget
     bar: nasWidget.bar
     open: nasWidget.opened
-    focusTarget: panel.loadedContent
+    focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(360))
-    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight, Style.space(520))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(520))
 
-    content: PanelKeyCatcher {
+    // A direct child rather than the content component Omarchy 4.5 added, so
+    // the panel opens on 4.0 too.
+    PanelKeyCatcher {
       id: keyCatcher
-      implicitHeight: column.implicitHeight
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
         if (!nasWidget.cursorActive) {
