@@ -134,6 +134,7 @@ h2 { font-size: 16px; line-height: 24px; font-weight: 500; }
 .steps code { color: var(--text); overflow-wrap: anywhere; }
 
 .foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 24px; color: var(--muted); font-size: 12px; }
+.foot-end { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
 
 /* Loading: the final layout with flat grey bars at the values' sizes. */
 .placeholder { display: inline-block; height: 0.9em; border-radius: 3px; background: var(--raised); vertical-align: middle; }

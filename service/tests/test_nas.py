@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -481,6 +482,20 @@ class ServiceTests(unittest.TestCase):
         base = Path(__file__).resolve().parents[1]
         self.assertIn(c.VERSION, (base / "README.md").read_text().splitlines()[0])
         self.assertIn(f"v{c.VERSION}", (base / "nas/assets/index.html").read_text())
+
+    def test_status_page_translates_every_fixed_backend_phrase(self):
+        # The status page shows these in English through its BACKEND_EN table; a reworded phrase
+        # here without a matching entry there would leave Chinese in the English page.
+        base = Path(__file__).resolve().parents[1]
+        app, core, web_src = ((base / f).read_text() for f in ("nas/assets/app.js", "nas/core.py", "nas/web.py"))
+        phrases = re.findall(r'reasons\.append\("([^"]+)"', core) + re.findall(r'\]\["reason"\] = "([^"]+)"', core)
+        self.assertGreaterEqual(len(phrases), 7)
+        for phrase in ("共享服务未运行", "等待后台核验 / 状态采样过期"):
+            self.assertIn(f'"{phrase}"', web_src)
+            phrases.append(phrase)
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                self.assertIn(f'"{phrase}":', app)
 
 class HttpTests(unittest.TestCase):
     @classmethod

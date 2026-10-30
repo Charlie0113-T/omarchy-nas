@@ -39,7 +39,7 @@ Two parts in one repository, for an [Omarchy](https://github.com/omacom/omarchy)
 | 📋 **Panel** | One row per share: state, name, size, file system and mode, or why it is offline. |
 | ⏯️ **Actions** | Pause or resume a share, open the status page, run diagnostics. |
 | ⌨️ **Keys** | Drive the whole panel from the keyboard. |
-| 🌐 **Languages** | 简体中文, 繁體中文 and English, following Omarchy's language setting. |
+| 🌐 **Languages** | The bar plugin: 简体中文, 繁體中文 and English, following Omarchy's language setting. The status page: English and 简体中文, following your browser, with a switch. |
 
 ## Requirements
 

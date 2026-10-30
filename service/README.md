@@ -12,7 +12,7 @@ This version covers: disk scanning, guided setup, read-only and writable shares,
 > **Status: in use.** As of 2026-10-29, omarchy-nas has been running stably on a real Omarchy machine for two weeks.
 
 > [!NOTE]
-> The setup wizard, command output and status page are in Chinese only for now. The commands and options themselves are in English, as below.
+> The status page is in English and Chinese: it follows your browser's language, and the switch at its foot changes it. The setup wizard and command output are in Chinese only for now; the commands and options themselves are in English, as below.
 
 ## Requirements
 
@@ -261,7 +261,7 @@ python3 dist/omarchy-nas.pyz setup
 
 完成后：
 
-- 本机管理页：<http://127.0.0.1:8787>
+- 本机管理页：<http://127.0.0.1:8787>（跟随浏览器语言显示中文或英文，页脚可以切换）
 - 终端打印真实 `smb://主机IP/共享名`，以实际输出为准。
 - Mac：Finder → 前往 → 连接服务器。
 - iPad：文件 → ⋯ → 连接服务器 → 注册用户。

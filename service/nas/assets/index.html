@@ -5,40 +5,40 @@
 <main class="page">
   <header class="title-row">
     <div class="title-block">
-      <nav class="crumbs" aria-label="位置"><a class="product" href="/"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2.5" width="16" height="4.5" rx="1.2" fill="currentColor"/><rect x="2.75" y="9.25" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2.75" y="14.75" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14.6" cy="4.75" r="1" fill="#fff"/></svg>Omarchy NAS</a><span class="sep" aria-hidden="true">/</span><span id="host">本机</span></nav>
-      <div class="title-line"><h1>存储总览</h1><span id="overall" class="pill neutral">读取中</span></div>
-      <p id="finding" class="finding">正在读取本机状态…</p>
+      <nav class="crumbs" aria-label="位置" data-i18n-label="location"><a class="product" href="/"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2.5" width="16" height="4.5" rx="1.2" fill="currentColor"/><rect x="2.75" y="9.25" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2.75" y="14.75" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14.6" cy="4.75" r="1" fill="#fff"/></svg>Omarchy NAS</a><span class="sep" aria-hidden="true">/</span><span id="host" data-i18n="thisComputer">本机</span></nav>
+      <div class="title-line"><h1 data-i18n="title">存储总览</h1><span id="overall" class="pill neutral" data-i18n="loading">读取中</span></div>
+      <p id="finding" class="finding" data-i18n="reading">正在读取本机状态…</p>
     </div>
     <div class="title-actions">
-      <span id="updated" class="stamp">等待首次读取</span>
-      <button id="refresh" class="button secondary" type="button">刷新</button>
+      <span id="updated" class="stamp" data-i18n="notReadYet">等待首次读取</span>
+      <button id="refresh" class="button secondary" type="button" data-i18n="refresh">刷新</button>
       <button id="primary" class="button primary" type="button" hidden></button>
     </div>
   </header>
 
-  <p id="demo-banner" class="notice" hidden>演示模式：页面上的设备、容量和地址都是示例数据，不代表这台电脑已经接通。</p>
+  <p id="demo-banner" class="notice" hidden data-i18n="demo">演示模式：页面上的设备、容量和地址都是示例数据，不代表这台电脑已经接通。</p>
   <div id="errors" role="status"></div>
 
   <!-- One card for the shares and how to reach them, then the disks. Inside the
        shares card, 1050 = 667 + 24 + 359 at 1440: the rows take two thirds. -->
   <section class="panel" aria-labelledby="shares-title">
     <div class="panel-head">
-      <div><h2 id="shares-title">共享</h2><p id="shares-sub" class="panel-sub"><span class="placeholder w12"></span></p></div>
+      <div><h2 id="shares-title" data-i18n="shares">共享</h2><p id="shares-sub" class="panel-sub"><span class="placeholder w12"></span></p></div>
       <p class="answer"><span id="online-count" class="figure"><span class="placeholder w3"></span></span><span id="online-unit" class="unit"></span></p>
     </div>
     <div class="split">
       <div id="shares" class="rows"><div class="share-row loading"><div><span class="placeholder w8"></span><span class="placeholder w16 sub"></span></div><span class="placeholder w14"></span></div></div>
       <div class="connect" role="group" aria-labelledby="connect-title">
-        <h3 id="connect-title">在其他设备上连接</h3>
+        <h3 id="connect-title" data-i18n="connectTitle">在其他设备上连接</h3>
         <dl class="facts">
-          <div><dt>账号</dt><dd id="account"><span class="placeholder w6"></span></dd></div>
-          <div><dt>密码</dt><dd>设置时的 NAS 密码<button id="passwd" class="text-button" type="button">修改</button></dd></div>
-          <div><dt>家庭网络</dt><dd id="network" class="num"><span class="placeholder w10"></span></dd></div>
+          <div><dt data-i18n="account">账号</dt><dd id="account"><span class="placeholder w6"></span></dd></div>
+          <div><dt data-i18n="password">密码</dt><dd><span data-i18n="passwordValue">设置时的 NAS 密码</span><button id="passwd" class="text-button" type="button" data-i18n="change">修改</button></dd></div>
+          <div><dt data-i18n="homeNetwork">家庭网络</dt><dd id="network" class="num"><span class="placeholder w10"></span></dd></div>
         </dl>
         <ul class="steps">
-          <li><strong>Mac</strong><span>Finder → 前往 → 连接服务器</span></li>
-          <li><strong>iPad</strong><span>文件 → ⋯ → 连接服务器 → 注册用户</span></li>
-          <li><strong>Windows</strong><span>地址栏输入 <code id="windows-path">\\主机IP\共享名</code></span></li>
+          <li><strong>Mac</strong><span data-i18n="stepMac">Finder → 前往 → 连接服务器</span></li>
+          <li><strong>iPad</strong><span data-i18n="stepIpad">文件 → ⋯ → 连接服务器 → 注册用户</span></li>
+          <li><strong>Windows</strong><span><span data-i18n="stepWindows">地址栏输入</span> <code id="windows-path">\\主机IP\共享名</code></span></li>
         </ul>
       </div>
     </div>
@@ -46,16 +46,16 @@
 
   <section class="panel" aria-labelledby="disks-title">
     <div class="panel-head">
-      <div><h2 id="disks-title">磁盘</h2><p id="disks-sub" class="panel-sub"><span class="placeholder w10"></span></p></div>
-      <button id="doctor" class="text-button" type="button">诊断命令</button>
+      <div><h2 id="disks-title" data-i18n="disks">磁盘</h2><p id="disks-sub" class="panel-sub"><span class="placeholder w10"></span></p></div>
+      <button id="doctor" class="text-button" type="button" data-i18n="diagnostics">诊断命令</button>
     </div>
     <table class="table">
-      <thead><tr><th scope="col">卷</th><th scope="col">文件系统</th><th scope="col">接口</th><th scope="col" class="num">容量</th><th scope="col" class="state-col"><span class="visually-hidden">状态</span></th></tr></thead>
+      <thead><tr><th scope="col" data-i18n="colVolume">卷</th><th scope="col" data-i18n="colFs">文件系统</th><th scope="col" data-i18n="colTransport">接口</th><th scope="col" class="num" data-i18n="colSize">容量</th><th scope="col" class="state-col"><span class="visually-hidden" data-i18n="colState">状态</span></th></tr></thead>
       <tbody id="disks"><tr class="loading"><td><span class="placeholder w10"></span></td><td><span class="placeholder w4"></span></td><td><span class="placeholder w3"></span></td><td class="num"><span class="placeholder w5"></span></td><td></td></tr></tbody>
     </table>
   </section>
 
-  <footer class="foot"><span>Omarchy NAS <span id="version">v0.3.0</span></span><span>独立社区工具，与 Omarchy 官方无关。管理页只在这台电脑上打开。</span></footer>
+  <footer class="foot"><span>Omarchy NAS <span id="version">v0.3.0</span></span><span class="foot-end"><span data-i18n="footer">独立社区工具，与 Omarchy 官方无关。管理页只在这台电脑上打开。</span><button id="language" class="text-button" type="button" lang="en">English</button></span></footer>
 </main>
 
 <dialog id="command-dialog" aria-labelledby="dialog-title">
@@ -63,8 +63,8 @@
   <p id="dialog-text"></p>
   <label class="field-label" for="command">在这台电脑的终端里运行</label>
   <textarea id="command" readonly rows="3"></textarea>
-  <div class="dialog-actions"><form method="dialog"><button class="button secondary" type="submit">关闭</button></form><button id="copy-command" class="button primary" type="button">复制命令</button></div>
-  <p class="dialog-note">磁盘和服务操作在终端里确认，状态页本身不申请管理员权限。</p>
+  <div class="dialog-actions"><form method="dialog"><button class="button secondary" type="submit" data-i18n="close">关闭</button></form><button id="copy-command" class="button primary" type="button" data-i18n="copyCommand">复制命令</button></div>
+  <p class="dialog-note" data-i18n="dialogNote">磁盘和服务操作在终端里确认，状态页本身不申请管理员权限。</p>
 </dialog>
 <div id="toast" role="status" hidden></div>
 </body>
