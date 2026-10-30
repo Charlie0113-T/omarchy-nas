@@ -6,10 +6,10 @@ Plug a USB drive enclosure into a computer running [Omarchy](https://github.com/
 
 It is a standalone community tool, not affiliated with Omarchy, and it doesn't rely on unpublished Omarchy APIs. To see the shares in the Omarchy bar, add the [Omarchy NAS bar plugin](https://github.com/Charlie0113-T/omarchy_nas).
 
-This version covers: disk scanning, guided setup, read-only and writable shares, a NAS password, bringing registered volumes back after a reboot or re-plug, pause and resume, a local status page, and an optional LAN HTTPS file gateway for Family Dashboard.
+This version covers: disk scanning, guided setup, read-only and writable shares, a NAS password, bringing registered volumes back after a reboot or re-plug, pause and resume, and a local status page.
 
 > [!NOTE]
-> **Status: in use.** As of 2026-10-29, omarchy-nas has been running stably on a real Omarchy machine for two weeks. [VERIFICATION.md](VERIFICATION.md) is the item-by-item record from before that, and it hasn't been updated since.
+> **Status: in use.** As of 2026-10-29, omarchy-nas has been running stably on a real Omarchy machine for two weeks.
 
 > [!NOTE]
 > The setup wizard, command output and status page are in Chinese only for now. The commands and options themselves are in English, as below.
@@ -70,8 +70,8 @@ Without `--demo`, `serve` reads the real local state and must run as a normal us
 This version shares standalone data volumes that Linux shows as USB or removable. Any enclosure brand can work, but firmware, USB bridge chips and hardware RAID haven't been checked one by one.
 It shares only volumes the system can see and doesn't replace a hardware RAID tool.
 The system disk and partitions on it are excluded; a volume another program has mounted must be unmounted there first.
-It doesn't format, partition, repair, decrypt, join Fusion Drives, do Time Machine, NFS or exposure to the internet. Web uploads go only through the separately paired home HTTPS gateway, to writable volumes; APFS is never written.
-If every data disk is APFS, you can shrink an APFS container on a Mac and create an ext4 partition for uploads by hand. Do it before `setup`: registered volumes are identified partly by their size.
+It doesn't format, partition, repair, decrypt, join Fusion Drives, do Time Machine, NFS or exposure to the internet. APFS is never written.
+If every data disk is APFS and you want a writable share, you can shrink an APFS container on a Mac and create an ext4 partition by hand. Do it before `setup`: registered volumes are identified partly by their size.
 
 ## APFS drives
 
@@ -120,8 +120,7 @@ sudo omarchy-nas remove family      # unregister and unmount; files on the volum
 sudo omarchy-nas passwd             # change the NAS password
 sudo omarchy-nas stop               # disable the services and autostart, unmount, keep the config
 sudo omarchy-nas start              # enable again
-sudo omarchy-nas network            # re-register after the router, network or home interface changed (then gateway-init --replace)
-sudo omarchy-nas gateway-renew      # renew the Family Dashboard gateway's server certificate; pairing unchanged
+sudo omarchy-nas network            # re-register after the router, network or home interface changed
 ```
 
 Pausing or removing a share restarts omarchy-nas's own Samba process, which briefly drops connections to the other shares too. Finish transfers first.
@@ -140,7 +139,7 @@ python3 build.py
 sudo python3 dist/omarchy-nas.pyz upgrade
 ```
 
-`upgrade` installs the new build and its service files and restarts the running services; pairing, credentials and certificates stay as they are.
+`upgrade` installs the new build and its service files and restarts the running services; registered volumes and the NAS password stay as they are.
 
 ## Remove
 
@@ -156,7 +155,7 @@ sudo python3 dist/omarchy-nas.pyz upgrade
    ```
 
    `rmdir` only removes empty directories, so it refuses any volume that is still mounted.
-3. Remove the firewall rules you added for ports 445 and 8789: `sudo ufw status numbered`, then `sudo ufw delete <number>`.
+3. Remove the firewall rule you added for port 445: `sudo ufw status numbered`, then `sudo ufw delete <number>`.
 
 Files on your data disks are never touched.
 
@@ -171,12 +170,11 @@ Files on your data disks are never touched.
 - Status cache: `/run/omarchy-nas/status.json`
 - systemd services: `omarchy-nas-smb.service`, `omarchy-nas-panel.service`, `omarchy-nas-reconcile.service` / `.timer`
 - Transient FUSE services: `omarchy-nas-volume-<share>.service`
-- Family Dashboard gateway: `omarchy-nas-gateway.service`, configured in `/etc/omarchy-nas/gateway.json`; after pairing it serves home HTTPS on port 8789. `stop` and `start` manage it too.
 
 ## Boundaries
 
-omarchy-nas doesn't modify `/etc/fstab`, an existing `/etc/samba/smb.conf`, sudoers or the firewall. Omarchy enables UFW and denies inbound connections by default, so allow 445 (SMB) and 8789 (gateway) for your home network only; `doctor` and `gateway-init` print the commands. If it finds a Samba service already running, setup stops instead of taking it over.
-Samba listens only on loopback and the registered home interface (`interfaces = lo <interface>`, `bind interfaces only = yes`) and accepts connections only from 127.0.0.1 and the registered home IPv4 network; everything else, public IPv6 included, is refused. The gateway and status page services run in a systemd sandbox (ProtectHome, ProtectSystem=full, PrivateTmp and more) and can't reach home directories or docker.sock.
+omarchy-nas doesn't modify `/etc/fstab`, an existing `/etc/samba/smb.conf`, sudoers or the firewall. Omarchy enables UFW and denies inbound connections by default, so allow 445 (SMB) for your home network only; `doctor` prints the command. If it finds a Samba service already running, setup stops instead of taking it over.
+Samba listens only on loopback and the registered home interface (`interfaces = lo <interface>`, `bind interfaces only = yes`) and accepts connections only from 127.0.0.1 and the registered home IPv4 network; everything else, public IPv6 included, is refused. The status page service runs in a systemd sandbox (ProtectHome, ProtectSystem=full, PrivateTmp and more) and can't reach home directories or docker.sock.
 A volume mounts automatically only after you registered it once by hand; newly plugged devices are never shared on their own.
 Volumes are checked by UUID/PARTUUID, capacity, file system and, when available, the disk's serial number. Duplicate UUIDs from cloned disks are refused.
 Empty mount points are owned by root with mode 000, and Samba checks the real mount on every new connection; symlinks aren't followed.
@@ -198,13 +196,9 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 - First setup failed after saving the config: run `sudo omarchy-nas start` to recover; don't wipe the data volume.
 - Connection refused: check the host IP printed, the chosen network interface, the home network and the firewall (`sudo ufw status`). The status page's localhost address isn't the file share address for another machine. If the network or interface changed, run `sudo omarchy-nas network`.
 
-## Family Dashboard gateway (optional)
-
-`sudo omarchy-nas gateway-init` pairs the NAS with Family Dashboard and turns on a LAN HTTPS file gateway on port 8789 for uploads to writable volumes. Family Dashboard is a separate web app that isn't public yet; SMB shares work without it.
-
 ## Verification
 
-Code checks (109 Python tests, builds and reviews) and simulated transfers pass, and as of 2026-10-29 omarchy-nas has been running stably on a real Omarchy machine for two weeks. [VERIFICATION.md](VERIFICATION.md) keeps the earlier record, with code, simulated and on-site results apart; its on-site checklist hasn't been ticked off item by item.
+52 automated tests cover disk registration and mount guards, APFS staying read-only, the Samba configuration, the systemd sandbox and the status page. As of 2026-10-29, omarchy-nas has been running stably on a real Omarchy machine for two weeks.
 
 ## Source and development
 
@@ -237,10 +231,10 @@ Released under the [GNU Affero General Public License v3.0](LICENSE). Copyright 
 把 USB 硬盘柜接到运行 Omarchy 的电脑，用已有数据卷提供家庭 SMB 共享。
 这是独立社区工具，与 Omarchy 官方无关，不依赖未公开的 Omarchy 插件 API。想在 Omarchy 顶栏看共享状态，可以装 [Omarchy NAS 顶栏插件](https://github.com/Charlie0113-T/omarchy_nas)。
 
-本版交付：设备扫描、交互设置、只读/可写共享、访问密码、重启/重新插入后恢复已登记卷、暂停/恢复、状态前端，以及 Family Dashboard 的 LAN HTTPS 文件网关（可选）。
+本版交付：设备扫描、交互设置、只读/可写共享、访问密码、重启/重新插入后恢复已登记卷、暂停/恢复，以及本机状态页。
 
 > [!NOTE]
-> **当前状态：已在使用。** 截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。[VERIFICATION.md](VERIFICATION.md) 是那之前逐项写的记录，之后没有更新。
+> **当前状态：已在使用。** 截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。
 
 ### 需要
 
@@ -298,8 +292,8 @@ python3 dist/omarchy-nas.pyz serve --demo
 本版只接入 Linux 显示为 USB 或可移除的独立数据卷。硬盘柜的品牌不限，但固件、USB 桥接芯片和硬件 RAID 的兼容性没有逐一验证。
 仅提供系统能识别的卷，不代替硬件 RAID 管理工具。
 系统盘及其同盘分区被排除；已由其他程序挂载的卷需要先正常卸载。
-程序不处理格式化、分区、修复、自动解密、Fusion Drive 拼接、Time Machine、NFS 或公网穿透。Web 上传仅通过单独配对的家庭 HTTPS 网关向可写卷提供；APFS 不提供写入。
-数据盘全是 APFS 时，可以在 Mac 上缩小 APFS 容器，再手动新建一个 ext4 上传分区。要在 `setup` 之前完成：已登记的卷按容量核对身份。
+程序不处理格式化、分区、修复、自动解密、Fusion Drive 拼接、Time Machine、NFS 或公网穿透。APFS 不提供写入。
+数据盘全是 APFS、又需要可写共享时，可以在 Mac 上缩小 APFS 容器，再手动新建一个 ext4 分区。要在 `setup` 之前完成：已登记的卷按容量核对身份。
 
 ### APFS 硬盘
 
@@ -348,8 +342,7 @@ sudo omarchy-nas remove family      # 取消登记并卸载；不删除卷内文
 sudo omarchy-nas passwd             # 修改本工具的 NAS 密码
 sudo omarchy-nas stop               # 停用服务/自动启动并正常卸载，保留配置
 sudo omarchy-nas start              # 重新启用
-sudo omarchy-nas network            # 路由器/网段或家庭网卡变化后重新登记网络（之后需 gateway-init --replace）
-sudo omarchy-nas gateway-renew      # 续期 Family Dashboard 网关服务器证书，凭据和配对不变
+sudo omarchy-nas network            # 路由器/网段或家庭网卡变化后重新登记网络
 ```
 
 暂停或移除共享时，本工具自己的 Samba 进程会重启，其他共享的连接也会短暂断开。先结束传输。
@@ -368,7 +361,7 @@ python3 build.py
 sudo python3 dist/omarchy-nas.pyz upgrade
 ```
 
-`upgrade` 安装新版本程序和服务文件并重启运行中的服务，不动配对、凭据和证书。
+`upgrade` 安装新版本程序和服务文件并重启运行中的服务，不动登记的卷和 NAS 密码。
 
 ### 卸载
 
@@ -384,7 +377,7 @@ sudo python3 dist/omarchy-nas.pyz upgrade
    ```
 
    `rmdir` 只删除空目录，仍在挂载的卷会被拒绝，不会受影响。
-3. 删除你为 445 和 8789 端口加的防火墙规则：`sudo ufw status numbered`，再 `sudo ufw delete <编号>`。
+3. 删除你为 445 端口加的防火墙规则：`sudo ufw status numbered`，再 `sudo ufw delete <编号>`。
 
 数据盘里的文件不会被动。
 
@@ -399,12 +392,11 @@ sudo python3 dist/omarchy-nas.pyz upgrade
 - 状态缓存：`/run/omarchy-nas/status.json`
 - systemd 服务：`omarchy-nas-smb.service`、`omarchy-nas-panel.service`、`omarchy-nas-reconcile.service/.timer`
 - FUSE 瞬态服务：`omarchy-nas-volume-共享名.service`
-- Family Dashboard 网关：`omarchy-nas-gateway.service`，配置 `/etc/omarchy-nas/gateway.json`，配对后启用家庭 HTTPS 端口 8789；`stop` / `start` 一并管理该服务。
 
 ### 边界
 
-不修改 `/etc/fstab`、现有 `/etc/samba/smb.conf`、用户 sudoers 或防火墙。Omarchy 默认启用 UFW 并拒绝入站，需要手动只对家庭网段放行 445（SMB）和 8789（网关），`doctor` 和 `gateway-init` 会给出命令。检测到已有 Samba 服务会停止本次设置，不抢占。
-Samba 只监听本机回环和登记的家庭网卡（`interfaces = lo <网卡>`，`bind interfaces only = yes`），并且只接受 127.0.0.1 和登记家庭 IPv4 网段的连接，其他来源（包括公网 IPv6）一律拒绝。网关与状态页服务使用 systemd 沙箱（ProtectHome、ProtectSystem=full、PrivateTmp 等），不能访问家目录和 docker.sock。
+不修改 `/etc/fstab`、现有 `/etc/samba/smb.conf`、用户 sudoers 或防火墙。Omarchy 默认启用 UFW 并拒绝入站，需要手动只对家庭网段放行 445（SMB），`doctor` 会给出命令。检测到已有 Samba 服务会停止本次设置，不抢占。
+Samba 只监听本机回环和登记的家庭网卡（`interfaces = lo <网卡>`，`bind interfaces only = yes`），并且只接受 127.0.0.1 和登记家庭 IPv4 网段的连接，其他来源（包括公网 IPv6）一律拒绝。状态页服务使用 systemd 沙箱（ProtectHome、ProtectSystem=full、PrivateTmp 等），不能访问家目录和 docker.sock。
 只在第一次手动登记后自动挂载该卷；不会把新插入的所有设备自动公开。
 UUID/PARTUUID、容量、文件系统和可用的硬盘序列号一起检查。克隆造成的重复 UUID 会被拒绝。
 空挂载点设为 root 所有的 000 权限，且 Samba 每次新连接都核验真实挂载；外链/符号链接不跟随。
@@ -426,13 +418,9 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 - 首次 setup 中途失败且已保存 config：使用 `sudo omarchy-nas start` 恢复，不要删数据卷。
 - 连接被拒绝：检查输出的主机 IP、所选网络接口、家庭网段和防火墙（`sudo ufw status`）；管理页的 localhost 地址不是另一台机器的文件共享地址。网段或网卡变了用 `sudo omarchy-nas network`。
 
-### Family Dashboard 网关（可选）
-
-`sudo omarchy-nas gateway-init` 把 NAS 与 Family Dashboard 配对，并在 8789 端口启用家庭局域网 HTTPS 文件网关，用于向可写卷上传。Family Dashboard 是另一个网页应用，目前没有公开；只用 SMB 共享不需要它。
-
 ### 验证
 
-代码检查（Python 109 项自动测试、构建、多轮审查）和模拟传输检查已经通过；截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。[VERIFICATION.md](VERIFICATION.md) 是之前的记录，把代码、模拟和真机三类结果分开写；其中的真机验收清单还没有逐项勾选。
+52 项自动测试覆盖磁盘登记与挂载保护、APFS 只读、Samba 配置、systemd 沙箱和状态页。截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。
 
 ### 源码与复现
 

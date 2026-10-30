@@ -167,9 +167,6 @@ def set_password(cfg):
 
 def write_units(cfg):
     units = c.unit_files(cfg)
-    if (c.P.etc / "gateway.json").exists():
-        from .gateway_setup import SERVICE, unit
-        units[SERVICE] = unit(cfg)
     for name, content in units.items():
         existing = c.P.units / name
         if existing.exists() and "omarchy-nas" not in existing.read_text():
@@ -178,21 +175,12 @@ def write_units(cfg):
     c.run(["systemctl", "daemon-reload"])
 
 
-def pairing_hint(share):
-    # gateway.json binds each paired name to the volume identity seen at gateway-init time.
-    path = c.P.etc / "gateway.json"
-    if not path.exists():
-        return
-    try:
-        paired = json.loads(path.read_text()).get("shares", [])
-    except (OSError, ValueError, AttributeError):
-        paired = []
-    name = share["name"]
-    entry = next((s for s in paired if s == name or isinstance(s, dict) and s.get("name") == name), None)
-    if entry is None or isinstance(entry, dict) and any(entry.get(k) != share[k] for k in ("id_type", "id", "fs")):
-        print((f"注意：FD 文件网关的配对中还没有 {name}" if entry is None else
-               f"注意：FD 文件网关配对时的 {name} 是另一个卷（例如已重新格式化或更换磁盘）") +
-              "，FD 暂时无法使用它。请在 FD 设置页复制 gateway-init 命令，加 --replace 重新运行，再在各设备导入新的 pairing.json。")
+def firewall_note(network, address):
+    command = c.firewall_commands(network, address)[0]
+    note = f"防火墙只向家庭网段放行 SMB（本程序不会修改防火墙）：\n   {command}"
+    if c.ufw_enabled():
+        note += "\n注意：UFW 已启用（/etc/ufw/ufw.conf ENABLED=yes）。放行前家庭设备连不上 445。"
+    return note
 
 
 def setup(args):
@@ -252,7 +240,6 @@ def add(args):
         c.run(["systemctl", "reload", c.SERVICE])
     c.reconcile()
     print(f"已登记共享：{share['name']}")
-    pairing_hint(share)
 
 
 def disable_share(name, *, forget=False):
@@ -293,13 +280,10 @@ def enable_share(name):
         c.run(["systemctl", "reload", c.SERVICE])
     c.reconcile()
     print(f"已恢复：{name}")
-    pairing_hint(shares[0])
 
 
 def stop():
     root()
-    if (c.P.etc / "gateway.json").exists():
-        c.run(["systemctl", "disable", "--now", "omarchy-nas-gateway.service"])
     c.run(["systemctl", "disable", "--now", "omarchy-nas-reconcile.timer", c.SERVICE, "omarchy-nas-panel.service"])
     # Also wait for an already-triggered reconcile job, not just its timer.
     c.run(["systemctl", "stop", "omarchy-nas-reconcile.service"], timeout=60)
@@ -326,8 +310,6 @@ def start():
     write_units(cfg)
     states = c.reconcile()
     c.run(["systemctl", "enable", "--now", c.SERVICE, "omarchy-nas-reconcile.timer", "omarchy-nas-panel.service"], timeout=60)
-    if (c.P.etc / "gateway.json").exists():
-        c.run(["systemctl", "enable", "--now", "omarchy-nas-gateway.service"])
     print(json.dumps(states, ensure_ascii=False, indent=2))
 
 
@@ -345,11 +327,8 @@ def renetwork(args):
         c.save_config(candidate)
     # Samba binds listening addresses at start; a reload would keep the old interface.
     c.run(["systemctl", "try-restart", c.SERVICE], timeout=60)
-    from .gateway_setup import firewall_note
     print(f"家庭网络：{cfg['interface']} · {cfg['network']} → {iface['name']} · {iface['network']}。共享与读写模式未改变。")
     print(firewall_note(iface["network"], iface["ip"]))
-    if (c.P.etc / "gateway.json").exists():
-        print("FD 文件网关仍使用旧地址：请在 FD 设置页复制命令，加 --replace 重新运行 gateway-init，再在设备导入新的 pairing.json。")
 
 
 def upgrade():
@@ -357,17 +336,11 @@ def upgrade():
     cfg = c.load_config()
     c.prepare_paths()
     copy_app()
-    # Never touches gateway.json, pairing.json or TLS files; only program, smb.conf and units.
+    # Only the program, smb.conf and the units change; registered volumes and the NAS password stay.
     c.write_smb(cfg)
     write_units(cfg)
     c.run(["systemctl", "try-restart", c.SERVICE, "omarchy-nas-panel.service"], timeout=60)
-    path = c.P.etc / "gateway.json"
-    if path.exists() and service_active("omarchy-nas-gateway.service"):
-        from .gateway_setup import wait_ready
-        gateway = json.loads(path.read_text())
-        c.run(["systemctl", "restart", "omarchy-nas-gateway.service"])
-        wait_ready(gateway["bind"], gateway["port"])
-    print(f"已升级到 {c.VERSION}；正在运行的服务已重启。配对、凭据与证书未改变。")
+    print(f"已升级到 {c.VERSION}；正在运行的服务已重启。登记的卷和 NAS 密码未改变。")
 
 
 def doctor():
@@ -386,8 +359,8 @@ def doctor():
         found = [i["ip"] for i in interfaces if i["name"] == cfg["interface"]]
         network, address = cfg["network"], found[0] if found else address
     ufw = {True: "已启用（Omarchy 默认拒绝入站）", False: "未启用", None: "未检测到 /etc/ufw/ufw.conf"}[c.ufw_enabled()]
-    print("\n若 lsblk 未显示 UUID，可用 sudo omarchy-nas scan 再检查。\n管理页只监听本机；共享通过所选家庭接口的 SMB3 / TCP 445 访问，FD 文件网关使用 HTTPS / TCP 8789。")
-    print(f"UFW：{ufw}\n防火墙只向家庭网段放行 8789 与 445（本程序不会修改防火墙）：")
+    print("\n若 lsblk 未显示 UUID，可用 sudo omarchy-nas scan 再检查。\n管理页只监听本机；共享通过所选家庭接口的 SMB3 / TCP 445 访问。")
+    print(f"UFW：{ufw}\n防火墙只向家庭网段放行 445（本程序不会修改防火墙）：")
     print("\n".join("  " + line for line in c.firewall_commands(network, address)))
 
 
@@ -415,19 +388,12 @@ def parser():
     for name in ("status", "reconcile", "stop", "start", "passwd"):
         commands.add_parser(name)
     commands.add_parser("upgrade", help="用新的 pyz 更新程序和服务文件并重启运行中的服务；不改配对、凭据和证书")
-    network = commands.add_parser("network", help="家庭网卡或网段变化后重新登记；之后需 gateway-init --replace")
+    network = commands.add_parser("network", help="家庭网卡或网段变化后重新登记")
     network.add_argument("--interface", help="家庭网络接口")
     web = commands.add_parser("serve", help="运行本机状态页面")
     web.add_argument("--no-browser", action="store_true")
     web.add_argument("--demo", action="store_true", help="显示明确标注的演示数据；无磁盘操作")
     web.add_argument("--port", type=int, default=8787)
-    gateway = commands.add_parser("gateway-init", help="配对 Family Dashboard 并启用 LAN HTTPS 文件网关")
-    gateway.add_argument("--family", required=True, help="FD 设置页显示的家庭 ID")
-    gateway.add_argument("--origin", required=True, help="FD 的 HTTPS 网站源")
-    gateway.add_argument("--address", help="当前家庭网卡 IPv4 地址")
-    gateway.add_argument("--replace", action="store_true", help="轮换配对凭据，旧凭据立即失效")
-    commands.add_parser("gateway-renew", help="用原 CA 续期网关服务器证书；配对凭据不变")
-    commands.add_parser("gateway-serve", help="以普通用户运行文件网关（通常由 systemd 调用）")
     return p
 
 
@@ -471,15 +437,6 @@ def main():
             upgrade()
         elif args.command == "network":
             renetwork(args)
-        elif args.command == "gateway-init":
-            from .gateway_setup import initialize
-            initialize(args)
-        elif args.command == "gateway-renew":
-            from .gateway_setup import renew
-            renew()
-        elif args.command == "gateway-serve":
-            from .gateway import serve
-            serve()
     except (c.NasError, OSError, ValueError, KeyError) as e:
         print(f"\n未完成：{e}", file=sys.stderr)
         sys.exit(1)

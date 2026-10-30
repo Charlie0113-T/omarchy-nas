@@ -419,7 +419,7 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = c.Paths(etc=Path(tmp), data=Path(tmp) / "data", run=Path(tmp) / "run")
             cfg = config(); cfg["shares"].append({**config("ext4", "rw")["shares"][0], "name": "upload", "id": "usb-444", "enabled": False})
-            p.config.write_text(json.dumps(cfg)); (p.etc / "gateway.json").write_text("{}")
+            p.config.write_text(json.dumps(cfg))
             calls = []
             def fake_run(args, **kwargs):
                 calls.append([str(a) for a in args]); return result()
@@ -439,68 +439,31 @@ class ServiceTests(unittest.TestCase):
             self.assertIn("hosts allow = 127.0.0.1 192.168.0.0/24", smb)
             self.assertEqual(calls[0][0], "testparm")
             self.assertIn(["systemctl", "try-restart", c.SERVICE], calls)
-            self.assertIn("gateway-init", out.getvalue()); self.assertIn("--replace", out.getvalue())
-            self.assertIn("sudo ufw allow from 192.168.0.0/24 to 192.168.0.23 port 8789 proto tcp", out.getvalue())
+            self.assertIn("sudo ufw allow from 192.168.0.0/24 to 192.168.0.23 port 445 proto tcp", out.getvalue())
+            self.assertNotIn("8789", out.getvalue())
 
-    def test_add_says_when_fd_pairing_does_not_cover_the_share(self):
-        cfg = config("ext4", "rw"); share = cfg["shares"][0]
-        old = {**{k: share[k] for k in ("name", "id_type", "id", "fs", "mode")}, "id": "old-apfs-uuid", "fs": "apfs", "mode": "ro"}
-        with tempfile.TemporaryDirectory() as tmp:
-            p = c.Paths(etc=Path(tmp)); gateway = p.etc / "gateway.json"
-            gateway.write_text(json.dumps({"shares": [old]}))
-            with patch.object(c, "P", p), patch.object(cli, "root"), patch.object(c, "load_config", return_value={**cfg, "shares": []}), \
-                 patch.object(cli, "selected_device"), patch.object(cli, "enroll", return_value=(cfg, share)), \
-                 patch.object(c, "locked", return_value=contextlib.nullcontext()), patch.object(c, "ensure_mounted"), patch.object(c, "inventory", return_value=[]), \
-                 patch.object(c, "write_smb"), patch.object(c, "save_config") as save, patch.object(cli, "service_active", return_value=False), \
-                 patch.object(c, "reconcile"), contextlib.redirect_stdout(io.StringIO()) as out:
-                cli.add(types.SimpleNamespace(claim_root=False))
-            save.assert_called_once_with(cfg)
-            self.assertEqual(json.loads(gateway.read_text()), {"shares": [old]})
-            hint = out.getvalue().splitlines()[-1]
-            for part in ("family", "另一个卷", "gateway-init", "--replace", "pairing.json"):
-                self.assertIn(part, hint)
-            same = {**old, "id": share["id"], "fs": "ext4", "mode": "rw"}
-            for paired, expected in (([], "还没有"), ([{**old, "name": "other"}], "还没有"), ([same], None), (["family"], None), (None, None)):
-                with self.subTest(paired=paired), patch.object(c, "P", p), contextlib.redirect_stdout(io.StringIO()) as out:
-                    if paired is None:
-                        gateway.unlink()
-                    else:
-                        gateway.write_text(json.dumps({"shares": paired}))
-                    cli.pairing_hint(share)
-                if expected:
-                    self.assertIn(expected, out.getvalue()); self.assertIn("--replace", out.getvalue())
-                else:
-                    self.assertEqual(out.getvalue(), "")
-
-    def test_upgrade_reinstalls_without_touching_pairing_or_tls(self):
+    def test_upgrade_reinstalls_the_program_and_units_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             p = c.Paths(etc=root / "etc", units=root / "units", app=root / "opt/omarchy-nas.pyz")
-            (p.etc / "tls").mkdir(parents=True); p.units.mkdir()
-            files = {"gateway.json": json.dumps({"bind": "192.168.1.24", "port": 8789, "tokenHash": "a" * 64, "gatewayId": "gw-1"}),
-                     "pairing.json": '{"token": "keep"}', "tls/server.crt": "sentinel", "tls/ca.key": "sentinel"}
-            for name, text in files.items():
-                (p.etc / name).write_text(text)
+            p.etc.mkdir(parents=True); p.units.mkdir()
+            p.config.write_text(json.dumps(config()))
+            before = p.config.read_text()
             calls = []
             def fake_run(args, **kwargs):
                 calls.append([str(a) for a in args]); return result()
-            from nas import gateway_setup
             with patch.object(c, "P", p), patch.object(cli, "root"), patch.object(cli, "copy_app") as copy_app, \
                  patch.object(c, "load_config", return_value=config()), patch.object(c, "prepare_paths"), patch.object(c, "write_smb") as smb, \
-                 patch.object(c, "run", side_effect=fake_run), patch.object(gateway_setup, "wait_ready") as ready, \
-                 patch.object(gateway_setup, "certificates") as certs, patch.object(gateway_setup, "initialize") as init, \
-                 contextlib.redirect_stdout(io.StringIO()):
+                 patch.object(c, "run", side_effect=fake_run), contextlib.redirect_stdout(io.StringIO()):
                 cli.upgrade()
-            copy_app.assert_called_once(); smb.assert_called_once(); certs.assert_not_called(); init.assert_not_called()
-            self.assertEqual({name: (p.etc / name).read_text() for name in files}, files)
+            copy_app.assert_called_once(); smb.assert_called_once()
+            self.assertEqual(p.config.read_text(), before)
             self.assertIn(["systemctl", "daemon-reload"], calls)
             self.assertIn(["systemctl", "try-restart", c.SERVICE, "omarchy-nas-panel.service"], calls)
-            self.assertIn(["systemctl", "restart", "omarchy-nas-gateway.service"], calls)
-            ready.assert_called_once_with("192.168.1.24", 8789)
-            self.assertIn("ProtectHome=yes", (p.units / "omarchy-nas-gateway.service").read_text())
             self.assertIn("ProtectHome=yes", (p.units / "omarchy-nas-panel.service").read_text())
+            self.assertEqual(sorted(u.name for u in p.units.iterdir() if "gateway" in u.name), [])
 
-    def test_doctor_lists_gateway_port_and_ufw_state(self):
+    def test_doctor_lists_the_smb_port_and_ufw_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             ufw = Path(tmp) / "ufw.conf"
             for text, state in (("ENABLED=yes\n", "UFW：已启用"), ("ENABLED=no\n", "UFW：未启用"), (None, "UFW：未检测到")):
@@ -511,53 +474,13 @@ class ServiceTests(unittest.TestCase):
                      patch.object(c, "load_config", return_value=config()), contextlib.redirect_stdout(io.StringIO()) as out:
                     cli.doctor()
                 self.assertIn(state, out.getvalue())
-                self.assertIn("TCP 445", out.getvalue()); self.assertIn("TCP 8789", out.getvalue())
-                self.assertIn("sudo ufw allow from 192.168.1.0/24 to 192.168.1.24 port 8789 proto tcp", out.getvalue())
-
-    def test_status_reports_gateway_certificate_expiry(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = c.Paths(etc=Path(tmp), run=Path(tmp))
-            with patch.object(c, "P", p), patch.object(c, "inventory", return_value=[]), patch.object(c, "network_interfaces", return_value=[]):
-                self.assertNotIn("gateway_certificate", web.snapshot())
-                (p.etc / "gateway.json").write_text("{}")
-                now = time.time()
-                expiries = {p.etc / "tls/server.crt": now + 9.5 * 86400, p.etc / "family-nas-ca.crt": now + 80.5 * 86400}
-                with patch.object(c, "cert_expiry", side_effect=expiries.__getitem__) as expiry:
-                    snap = web.snapshot()
-            # The panel user cannot read the root-only tls/ca.crt; the public copy has the same certificate.
-            self.assertEqual([call.args[0] for call in expiry.call_args_list], list(expiries))
-            self.assertEqual(snap["gateway_certificate"], {"not_after": expiries[p.etc / "tls/server.crt"], "days_left": 9,
-                                                           "ca_not_after": expiries[p.etc / "family-nas-ca.crt"], "ca_days_left": 80})
-
-    def test_status_keeps_gateway_expiry_without_the_public_ca_copy(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = c.Paths(etc=Path(tmp), run=Path(tmp))
-            (p.etc / "gateway.json").write_text("{}")
-            def expiry(path):
-                if path.name == "family-nas-ca.crt":
-                    raise c.NasError("openssl 失败（1）：STORE routines: unregistered scheme")
-                return time.time() + 9.5 * 86400
-            with patch.object(c, "P", p), patch.object(c, "inventory", return_value=[]), patch.object(c, "network_interfaces", return_value=[]), \
-                 patch.object(c, "cert_expiry", side_effect=expiry):
-                snap = web.snapshot()
-        self.assertEqual(snap["gateway_certificate"]["days_left"], 9)
-        self.assertNotIn("ca_days_left", snap["gateway_certificate"])
-        self.assertTrue(any("family-nas-ca.crt" in e for e in snap["errors"]))
-        self.assertFalse(any("STORE routines" in e for e in snap["errors"]))
+                self.assertIn("TCP 445", out.getvalue()); self.assertNotIn("8789", out.getvalue())
+                self.assertIn("sudo ufw allow from 192.168.1.0/24 to 192.168.1.24 port 445 proto tcp", out.getvalue())
 
     def test_version_strings_agree(self):
         base = Path(__file__).resolve().parents[1]
         self.assertIn(c.VERSION, (base / "README.md").read_text().splitlines()[0])
-        self.assertIn(f"版本：{c.VERSION}", (base / "VERIFICATION.md").read_text())
         self.assertIn(f"v{c.VERSION}", (base / "nas/assets/index.html").read_text())
-
-    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
-    def test_certificate_expiry_is_read_from_the_certificate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30", "-subj", "/CN=Family NAS/",
-                            "-keyout", f"{tmp}/key", "-out", f"{tmp}/crt"], check=True, capture_output=True)
-            self.assertAlmostEqual(c.cert_expiry(f"{tmp}/crt"), time.time() + 30 * 86400, delta=120)
-
 
 class HttpTests(unittest.TestCase):
     @classmethod
@@ -577,8 +500,7 @@ class HttpTests(unittest.TestCase):
     def test_demo_api_is_explicitly_marked_and_assets_load(self):
         status,headers,data=self.request("/api/status")
         self.assertEqual(status,200); self.assertTrue(json.loads(data)["demo"])
-        self.assertLess(json.loads(data)["gateway_certificate"]["days_left"],30)
-        self.assertGreater(json.loads(data)["gateway_certificate"]["ca_days_left"],90)
+        self.assertNotIn("gateway_certificate",json.loads(data))
         for path in ("/","/app.js","/style.css"):
             status,headers,data=self.request(path)
             self.assertEqual(status,200); self.assertTrue(len(data)>100)

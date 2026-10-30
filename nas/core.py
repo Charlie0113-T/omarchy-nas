@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import ssl
 import stat
 import subprocess
 import tempfile
@@ -24,7 +23,7 @@ SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 SERVICE = "omarchy-nas-smb.service"
 PYTHON = "/usr/bin/python3"
 UFW = Path("/etc/ufw/ufw.conf")
-# Defence in depth for the LAN gateway and the desktop-user panel. Keeps /srv, /dev and
+# Defence in depth for the desktop-user panel. Keeps /srv, /dev and
 # /sys visible: verify_mount resolves /dev/disk/by-* and lsblk reads sysfs.
 HARDENING = """NoNewPrivileges=true
 CapabilityBoundingSet=
@@ -578,11 +577,6 @@ WantedBy=multi-user.target
 """}
 
 
-def cert_expiry(path):
-    out = run(["openssl", "x509", "-noout", "-enddate", "-in", str(path)])
-    return ssl.cert_time_to_seconds(out.stdout.strip().removeprefix("notAfter="))
-
-
 def ufw_enabled(path=None):
     try:
         lines = (path or UFW).read_text().splitlines()
@@ -593,7 +587,7 @@ def ufw_enabled(path=None):
 
 def firewall_commands(network, address):
     # Printed for the admin only; this tool never changes the firewall.
-    return [f"sudo ufw allow from {network} to {address} port {port} proto tcp" for port in (8789, 445)]
+    return [f"sudo ufw allow from {network} to {address} port 445 proto tcp"]
 
 
 def human_size(size):
