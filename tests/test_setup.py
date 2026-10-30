@@ -116,7 +116,7 @@ class SetupTests(unittest.TestCase):
             days = (c.cert_expiry(tls / "ca.crt") - c.cert_expiry(tls / "server.crt")) / 86400
             self.assertAlmostEqual(days, 1825 - 365, delta=1)
             leaf = openssl("x509", "-in", tls / "server.crt", "-noout", "-subject", "-ext", "subjectAltName").stdout
-            self.assertIn("CN = Family NAS", leaf)
+            self.assertRegex(leaf, r"CN ?= ?Family NAS")
             self.assertIn("IP Address:192.168.1.24", leaf)
             self.assertNotIn("DNS:", leaf)
             real = openssl("verify", "-CAfile", tls / "ca.crt", tls / "server.crt")
