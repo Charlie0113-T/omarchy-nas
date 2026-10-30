@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.charlie0113-t.omarchy-nas",
+  "name": "Omarchy NAS",
+  "version": "0.1.0",
+  "author": "Charles Tao",
+  "license": "AGPL-3.0",
+  "description": "Status of the shares that omarchy-nas serves from this machine, in the bar: which disks are online, paused or offline, with pause, resume and diagnostics one click away.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "NAS",
+    "description": "Shares served by omarchy-nas on this machine, and their state.",
+    "category": "Files",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 60,
+      "statusPort": 8787
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 15,
+        "max": 3600,
+        "step": 15,
+        "defaultValue": 60
+      },
+      {
+        "key": "statusPort",
+        "type": "integer",
+        "label": "Status page port",
+        "min": 1024,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 8787
+      }
+    ]
+  }
+}
