@@ -1,5 +1,10 @@
 /* Omarchy NAS status page. Achromatic ledger: ink chrome, colour only on
-   status, one blue-grey ground, one 12px gap. */
+   status, one blue-grey ground, one 12px gap. Geist and Geist Mono are served (taste-skill-ignore: the mono face is for addresses and commands only)
+   by the page itself (SIL Open Font License, see Geist-LICENSE.txt); Chinese
+   falls through to PingFang or Noto Sans CJK. */
+
+@font-face { font-family: "Geist"; src: url("/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; } /* taste-skill-ignore: addresses and commands only */
 
 :root {
   color-scheme: light;
@@ -26,8 +31,8 @@
   --pad: 24px;
   --control-height: 36px;
   --row-height: 44px;
-  --font: "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
-  --mono: ui-monospace, "JetBrains Mono", "Noto Sans Mono CJK SC", monospace; /* taste-skill-ignore: addresses and terminal commands are literal code */
+  --font: "Geist", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "JetBrains Mono", "Noto Sans Mono CJK SC", monospace; /* taste-skill-ignore: addresses and terminal commands are literal code */
 }
 
 * { box-sizing: border-box; }

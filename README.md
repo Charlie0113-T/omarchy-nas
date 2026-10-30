@@ -224,6 +224,8 @@ References:
 
 Released under the [GNU Affero General Public License v3.0](LICENSE). Copyright © 2026 Charles Tao. This is a community tool and is not affiliated with Omarchy.
 
+The status page is set in Geist and Geist Mono, © 2023 Vercel in collaboration with basement.studio, under the [SIL Open Font License 1.1](nas/assets/Geist-LICENSE.txt).
+
 ---
 
 ## 中文
@@ -437,3 +439,5 @@ Python 3.11+，目标 Omarchy / Arch Linux + systemd。其他发行版的安装�
 ### 许可证
 
 以 [GNU Affero General Public License v3.0](LICENSE) 发布。Copyright © 2026 Charles Tao。这是社区工具，与 Omarchy 官方无关。
+
+状态页使用的 Geist 与 Geist Mono 字体 © 2023 Vercel 与 basement.studio，以 [SIL Open Font License 1.1](nas/assets/Geist-LICENSE.txt) 发布。

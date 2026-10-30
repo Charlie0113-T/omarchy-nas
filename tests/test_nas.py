@@ -506,6 +506,9 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(status,200); self.assertTrue(len(data)>100)
             self.assertIn("frame-ancestors 'none'",headers["Content-Security-Policy"])
         self.assertIn(f'<span id="version">v{c.VERSION}</span>'.encode(),self.request("/")[2])
+        for path in ("/Geist-Variable.woff2","/GeistMono-Variable.woff2"):
+            status,headers,data=self.request(path)
+            self.assertEqual((status,headers["Content-Type"],data[:4]),(200,"font/woff2",b"wOF2"))
         # The public status page says nothing about Family Dashboard or its gateway.
         page=self.request("/")[2].decode()+self.request("/app.js")[2].decode()
         for word in ("Family Dashboard","gateway-renew","gateway-init"):

@@ -87,7 +87,9 @@ def make_handler(demo=False):
                 return
             routes = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                      "/style.css": ("style.css", "text/css; charset=utf-8")}
+                      "/style.css": ("style.css", "text/css; charset=utf-8"),
+                      "/Geist-Variable.woff2": ("Geist-Variable.woff2", "font/woff2"),
+                      "/GeistMono-Variable.woff2": ("GeistMono-Variable.woff2", "font/woff2")}
             if self.path == "/api/status":
                 with self.server.cache_lock:
                     if time.monotonic() - self.server.cache_at > 3:
