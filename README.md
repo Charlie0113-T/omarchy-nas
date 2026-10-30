@@ -24,7 +24,7 @@ Omarchy 4 bar plugin · Pause, resume and diagnostics one click away · Never ru
 
 ---
 
-An [Omarchy](https://github.com/omacom/omarchy) 4 bar plugin for the machine that runs [omarchy-nas](https://github.com/RoyTao2025/FD/tree/main/services/omarchy-nas). It shows which shares are online, paused or offline, and puts pause, resume and diagnostics one click away.
+An [Omarchy](https://github.com/omacom/omarchy) 4 bar plugin for the machine that runs [omarchy-nas](https://github.com/Charlie0113-T/omarchy-nas). It shows which shares are online, paused or offline, and puts pause, resume and diagnostics one click away.
 
 ## At a glance
 
