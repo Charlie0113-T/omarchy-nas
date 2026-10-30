@@ -22,15 +22,9 @@ var GLYPH = {
   check: glyph(0xF012C),        // md-check
   web: glyph(0xF059F),          // md-web
   doctor: glyph(0xF04D9),       // md-stethoscope
-  certificate: glyph(0xF0124),  // md-certificate
   readOnly: glyph(0xF0341),     // md-lock_outline
   writable: glyph(0xF0CB6)      // md-pencil_outline
 }
-
-// Shares at or below this many days of server-certificate life are urgent;
-// below CERT_NOTICE_DAYS the panel shows the renew row.
-var CERT_URGENT_DAYS = 14
-var CERT_NOTICE_DAYS = 30
 
 // The share names omarchy-nas accepts (core.valid_name). Anything else never
 // reaches a command line.
@@ -50,9 +44,6 @@ var STRINGS = {
     copyAddress: "Copy the address of %1",
     pauseShare: "Pause %1",
     resumeShare: "Resume %1",
-    certificate: "Certificate expires in %1 d",
-    certificateExpired: "Certificate expired",
-    renew: "Renew certificate",
     statusPage: "Open status page",
     doctor: "Run diagnostics",
     refresh: "Refresh",
@@ -73,9 +64,6 @@ var STRINGS = {
     copyAddress: "复制 %1 的地址",
     pauseShare: "暂停 %1",
     resumeShare: "继续 %1",
-    certificate: "证书 %1 天后到期",
-    certificateExpired: "证书已过期",
-    renew: "续期证书",
     statusPage: "打开状态页",
     doctor: "运行诊断",
     refresh: "刷新",
@@ -96,9 +84,6 @@ var STRINGS = {
     copyAddress: "複製 %1 的位址",
     pauseShare: "暫停 %1",
     resumeShare: "繼續 %1",
-    certificate: "憑證 %1 天後到期",
-    certificateExpired: "憑證已過期",
-    renew: "續期憑證",
     statusPage: "開啟狀態頁",
     doctor: "執行診斷",
     refresh: "重新整理",
@@ -188,7 +173,7 @@ function summarize(snapshot, outcome) {
   var result = {
     state: "checking", level: "dim", hostname: "", version: "",
     shares: [], online: 0, offline: 0, paused: 0, total: 0,
-    certDaysLeft: null, errors: []
+    errors: []
   }
   if (how.missing) {
     result.state = "missing"
@@ -213,8 +198,6 @@ function summarize(snapshot, outcome) {
     result[s.state]++
   }
   result.total = result.shares.length
-  var cert = snapshot.gateway_certificate
-  if (cert && typeof cert === "object" && isFinite(Number(cert.days_left))) result.certDaysLeft = Number(cert.days_left)
 
   if (snapshot.configured !== true) {
     result.state = "unconfigured"
@@ -225,8 +208,7 @@ function summarize(snapshot, outcome) {
     result.level = "urgent"
     return result
   }
-  var certUrgent = result.certDaysLeft !== null && result.certDaysLeft <= CERT_URGENT_DAYS
-  if (result.offline > 0 || result.errors.length > 0 || certUrgent) {
+  if (result.offline > 0 || result.errors.length > 0) {
     result.state = "degraded"
     result.level = "urgent"
   } else {
@@ -264,15 +246,6 @@ function shareDetail(item, language) {
   return parts.join(" · ")
 }
 
-function certificateText(summary, language) {
-  if (summary.certDaysLeft === null) return ""
-  return summary.certDaysLeft < 0 ? t(language, "certificateExpired") : t(language, "certificate", [summary.certDaysLeft])
-}
-
-function showCertificateRow(summary) {
-  return summary.certDaysLeft !== null && summary.certDaysLeft < CERT_NOTICE_DAYS
-}
-
 // The command a share's pause/resume button runs in a terminal, or "" for a
 // name omarchy-nas would never have accepted.
 function toggleCommand(item) {
@@ -280,5 +253,4 @@ function toggleCommand(item) {
   return "sudo omarchy-nas " + (item.state === "paused" ? "resume " : "pause ") + item.name
 }
 
-var RENEW_COMMAND = "sudo omarchy-nas gateway-renew"
 var DOCTOR_COMMAND = "omarchy-nas doctor"

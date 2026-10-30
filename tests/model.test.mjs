@@ -97,28 +97,6 @@ test('a status command that failed says why', () => {
   assert.deepEqual([...s.errors], ['未完成：配置无法读取']);
 });
 
-test('the certificate row shows under 30 days; 14 or fewer is urgent', () => {
-  const cert = (days) => snapshot({ gateway_certificate: { not_after: 0, days_left: days } });
-  const far = M.summarize(cert(200), null);
-  assert.equal(M.showCertificateRow(far), false);
-  assert.equal(far.level, 'normal');
-
-  const soon = M.summarize(cert(20), null);
-  assert.equal(M.showCertificateRow(soon), true);
-  assert.equal(soon.level, 'normal');
-  assert.equal(M.certificateText(soon, 'zh-CN'), '证书 20 天后到期');
-
-  const urgent = M.summarize(cert(14), null);
-  assert.equal(urgent.level, 'urgent');
-
-  const expired = M.summarize(cert(-2), null);
-  assert.equal(M.certificateText(expired, 'zh-TW'), '憑證已過期');
-
-  const none = M.summarize(snapshot(), null);
-  assert.equal(none.certDaysLeft, null);
-  assert.equal(M.showCertificateRow(none), false);
-});
-
 test('sizes read the way drives are sold', () => {
   assert.equal(M.formatBytes(12_000_000_000_000), '12 TB');
   assert.equal(M.formatBytes(4_000_787_030_016), '4 TB');

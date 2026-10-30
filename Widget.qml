@@ -10,8 +10,8 @@ import "Model.js" as Model
 
 // Omarchy NAS in the bar: a NAS icon whose colour says how the shares are
 // (faded before omarchy-nas answers or while it isn't set up, the urgent
-// colour when a share is offline, the service is down or the certificate is
-// about to run out), and a panel listing each share with the few actions
+// colour when a share is offline or the service is down or reports an
+// error), and a panel listing each share with the few actions
 // worth a click. The widget only reads status. Anything that needs root
 // opens a terminal showing the command, where the person types their own
 // password; the shell never runs sudo.
@@ -253,42 +253,6 @@ Panel {
                 item: modelData
                 rowIndex: index
               }
-            }
-          }
-
-          // The gateway's server certificate, once it has under a month left.
-          RowLayout {
-            visible: Model.showCertificateRow(nasWidget.summary)
-            width: parent.width
-            spacing: Style.space(8)
-
-            Text {
-              textFormat: Text.PlainText
-              text: Model.GLYPH.certificate
-              color: nasWidget.summary.level === "urgent" ? nasWidget.urgent : nasWidget.foreground
-              font.family: nasWidget.fontFamily
-              font.pixelSize: Style.font.icon
-              Layout.alignment: Qt.AlignVCenter
-              Layout.leftMargin: Style.space(10)
-            }
-
-            Text {
-              Layout.fillWidth: true
-              text: Model.certificateText(nasWidget.summary, nasWidget.language)
-              textFormat: Text.PlainText
-              color: nasWidget.foreground
-              font.family: nasWidget.fontFamily
-              font.pixelSize: Style.font.body
-              elide: Text.ElideRight
-            }
-
-            PanelActionButton {
-              iconText: Model.GLYPH.refresh
-              tooltipText: nasWidget.tr("renew")
-              foreground: nasWidget.foreground
-              fontFamily: nasWidget.fontFamily
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: nasWidget.runInTerminal(Model.RENEW_COMMAND)
             }
           }
 
