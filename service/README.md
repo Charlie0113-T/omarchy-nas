@@ -4,7 +4,7 @@
 
 Plug a USB drive enclosure into a computer running [Omarchy](https://github.com/omacom/omarchy) and share the data volumes already on its disks with your home network over SMB.
 
-It is a standalone community tool, not affiliated with Omarchy, and it doesn't rely on unpublished Omarchy APIs. To see the shares in the Omarchy bar, add the [Omarchy NAS bar plugin](https://github.com/Charlie0113-T/omarchy_nas).
+It is a standalone community tool, not affiliated with Omarchy, and it doesn't rely on unpublished Omarchy APIs. To see the shares in the Omarchy bar, add the [Omarchy NAS bar plugin](../README.md) from this same repository.
 
 This version covers: disk scanning, guided setup, read-only and writable shares, a NAS password, bringing registered volumes back after a reboot or re-plug, pause and resume, and a local status page.
 
@@ -25,7 +25,7 @@ This version covers: disk scanning, guided setup, read-only and writable shares,
 ```bash
 sudo pacman -S --needed samba ntfs-3g
 git clone https://github.com/Charlie0113-T/omarchy-nas.git
-cd omarchy-nas
+cd omarchy-nas/service
 python3 build.py                      # writes dist/omarchy-nas.pyz
 python3 dist/omarchy-nas.pyz setup
 ```
@@ -133,7 +133,7 @@ When the default service already holds port 8787, there's no need to run `serve`
 ## Update
 
 ```bash
-cd omarchy-nas
+cd omarchy-nas/service
 git pull
 python3 build.py
 sudo python3 dist/omarchy-nas.pyz upgrade
@@ -204,6 +204,8 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 
 The `.pyz` is a standard ZIP holding the Python source, the web page, the tests and this README; no pip or npm needed.
 
+Run these in `service/`:
+
 ```bash
 python3 -m unittest discover -s tests -v
 python3 build.py
@@ -222,7 +224,7 @@ References:
 
 ## License
 
-Released under the [GNU Affero General Public License v3.0](LICENSE). Copyright © 2026 Charles Tao. This is a community tool and is not affiliated with Omarchy.
+Released under the [GNU Affero General Public License v3.0](../LICENSE). Copyright © 2026 Charles Tao. This is a community tool and is not affiliated with Omarchy.
 
 The status page is set in Geist and Geist Mono, © 2023 Vercel in collaboration with basement.studio, under the [SIL Open Font License 1.1](nas/assets/Geist-LICENSE.txt).
 
@@ -231,7 +233,7 @@ The status page is set in Geist and Geist Mono, © 2023 Vercel in collaboration 
 ## 中文
 
 把 USB 硬盘柜接到运行 Omarchy 的电脑，用已有数据卷提供家庭 SMB 共享。
-这是独立社区工具，与 Omarchy 官方无关，不依赖未公开的 Omarchy 插件 API。想在 Omarchy 顶栏看共享状态，可以装 [Omarchy NAS 顶栏插件](https://github.com/Charlie0113-T/omarchy_nas)。
+这是独立社区工具，与 Omarchy 官方无关，不依赖未公开的 Omarchy 插件 API。想在 Omarchy 顶栏看共享状态，可以装同一个仓库里的 [Omarchy NAS 顶栏插件](../README.md#中文)。
 
 本版交付：设备扫描、交互设置、只读/可写共享、访问密码、重启/重新插入后恢复已登记卷、暂停/恢复，以及本机状态页。
 
@@ -249,7 +251,7 @@ The status page is set in Geist and Geist Mono, © 2023 Vercel in collaboration 
 ```bash
 sudo pacman -S --needed samba ntfs-3g
 git clone https://github.com/Charlie0113-T/omarchy-nas.git
-cd omarchy-nas
+cd omarchy-nas/service
 python3 build.py                      # 生成 dist/omarchy-nas.pyz
 python3 dist/omarchy-nas.pyz setup
 ```
@@ -357,7 +359,7 @@ sudo omarchy-nas network            # 路由器/网段或家庭网卡变化后�
 ### 更新
 
 ```bash
-cd omarchy-nas
+cd omarchy-nas/service
 git pull
 python3 build.py
 sudo python3 dist/omarchy-nas.pyz upgrade
@@ -428,6 +430,8 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 
 `.pyz` 是标准 ZIP，包含 Python 源码、网页、测试和本说明，无需 pip/npm。
 
+在 `service/` 目录里运行：
+
 ```bash
 python3 -m unittest discover -s tests -v
 python3 build.py
@@ -438,6 +442,6 @@ Python 3.11+，目标 Omarchy / Arch Linux + systemd。其他发行版的安装�
 
 ### 许可证
 
-以 [GNU Affero General Public License v3.0](LICENSE) 发布。Copyright © 2026 Charles Tao。这是社区工具，与 Omarchy 官方无关。
+以 [GNU Affero General Public License v3.0](../LICENSE) 发布。Copyright © 2026 Charles Tao。这是社区工具，与 Omarchy 官方无关。
 
 状态页使用的 Geist 与 Geist Mono 字体 © 2023 Vercel 与 basement.studio，以 [SIL Open Font License 1.1](nas/assets/Geist-LICENSE.txt) 发布。

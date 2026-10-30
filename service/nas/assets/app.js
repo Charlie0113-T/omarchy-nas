@@ -22,7 +22,7 @@ function setPrimary(label, action) { const b = byId("primary"); primaryAction = 
 const doctor = data => () => command("诊断设备与依赖", "输出设备识别结果、挂载限制和依赖情况，不会改动磁盘。", data.configured ? "omarchy-nas doctor" : "python3 dist/omarchy-nas.pyz doctor");
 const setup = data => () => data.configured
   ? command("添加磁盘", "向导会先显示具体设备和共享模式，再要求确认。默认只读；不会格式化磁盘。", "sudo omarchy-nas add")
-  : command("开始设置", "在 omarchy-nas 目录里运行（先用 python3 build.py 生成 dist/omarchy-nas.pyz）。向导会先显示具体设备和共享模式，再要求确认。", "python3 dist/omarchy-nas.pyz setup");
+  : command("开始设置", "在 omarchy-nas 的 service 目录里运行（先用 python3 build.py 生成 dist/omarchy-nas.pyz）。向导会先显示具体设备和共享模式，再要求确认。", "python3 dist/omarchy-nas.pyz setup");
 const start = () => command("启动共享服务", "重新启用服务和自动启动，并挂载登记过的卷。", "sudo omarchy-nas start");
 const passwd = () => command("修改 NAS 密码", "只改 omarchy-nas 自己的 Samba 账号密码，不改 Linux 登录密码。改完后，各设备下次连接时输入新密码。", "sudo omarchy-nas passwd");
 

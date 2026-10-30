@@ -1,4 +1,4 @@
-"""Build the self-contained zipapp into dist/; run from the source directory."""
+"""Build the self-contained zipapp into dist/; run from the service directory."""
 from pathlib import Path
 import zipfile
 
@@ -13,4 +13,8 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as out:
         hidden = any(part.startswith(".") for part in relative.parts)
         if file.is_file() and not hidden and not skip.intersection(relative.parts) and file.suffix != ".pyc":
             out.write(file, relative)
+    # The license sits at the repository root, beside the bar plugin it also covers.
+    license = root.parent / "LICENSE"
+    if license.is_file():
+        out.write(license, "LICENSE")
 print(target)
