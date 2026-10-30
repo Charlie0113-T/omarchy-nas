@@ -8,8 +8,8 @@ It is a standalone community tool, not affiliated with Omarchy, and it doesn't r
 
 This version covers: disk scanning, guided setup, read-only and writable shares, a NAS password, bringing registered volumes back after a reboot or re-plug, pause and resume, a local status page, and an optional LAN HTTPS file gateway for Family Dashboard.
 
-> [!WARNING]
-> **Status: code checks and simulated transfers pass; on-site testing on real hardware hasn't happened yet** (the first run is planned on a Mac mini Late 2014 with a USB enclosure and real APFS volumes). Don't read these results as proof that your disks will mount. See [VERIFICATION.md](VERIFICATION.md).
+> [!NOTE]
+> **Status: in use.** As of 2026-10-29, omarchy-nas has been running stably on a real Omarchy machine for two weeks. [VERIFICATION.md](VERIFICATION.md) is the item-by-item record from before that, and it hasn't been updated since.
 
 > [!NOTE]
 > The setup wizard, command output and status page are in Chinese only for now. The commands and options themselves are in English, as below.
@@ -204,9 +204,7 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 
 ## Verification
 
-Code checks (109 Python tests, builds and reviews) and **simulated** transfers pass; on-site testing on real hardware hasn't started. [VERIFICATION.md](VERIFICATION.md) keeps the three kinds of result apart and lists what is still to check.
-Planned order for the first on-site run: `doctor` → `setup --writable` (an ext4 upload disk) → SMB sign-in from a Mac and an iPad and a read/write test → `gateway-init` → trust the certificate on each device and pair in Family Dashboard → upload/download comparison → pause / resume → check after a reboot.
-Hardware and file systems are marked as tested only after those steps pass. APFS has no write test.
+Code checks (109 Python tests, builds and reviews) and simulated transfers pass, and as of 2026-10-29 omarchy-nas has been running stably on a real Omarchy machine for two weeks. [VERIFICATION.md](VERIFICATION.md) keeps the earlier record, with code, simulated and on-site results apart; its on-site checklist hasn't been ticked off item by item.
 
 ## Source and development
 
@@ -241,8 +239,8 @@ Released under the [GNU Affero General Public License v3.0](LICENSE). Copyright 
 
 本版交付：设备扫描、交互设置、只读/可写共享、访问密码、重启/重新插入后恢复已登记卷、暂停/恢复、状态前端，以及 Family Dashboard 的 LAN HTTPS 文件网关（可选）。
 
-> [!WARNING]
-> **当前状态：代码及模拟验证完成，真机现场验收还没做**（首次验收计划用 Mac mini Late 2014 + 硬盘柜 + 实际 APFS 卷）。不能把这里的验证结果视为数据盘已挂载成功。详见 [VERIFICATION.md](VERIFICATION.md)。
+> [!NOTE]
+> **当前状态：已在使用。** 截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。[VERIFICATION.md](VERIFICATION.md) 是那之前逐项写的记录，之后没有更新。
 
 ### 需要
 
@@ -432,12 +430,9 @@ journalctl -u omarchy-nas-reconcile -n 60 --no-pager
 
 `sudo omarchy-nas gateway-init` 把 NAS 与 Family Dashboard 配对，并在 8789 端口启用家庭局域网 HTTPS 文件网关，用于向可写卷上传。Family Dashboard 是另一个网页应用，目前没有公开；只用 SMB 共享不需要它。
 
-### 验证记录 · 2026-10-04
+### 验证
 
-已完成代码检查（Python 109 项自动测试、构建、多轮审查）和**模拟**传输检查；真机验收（Mac mini、硬盘柜、家庭 Wi-Fi、iPhone/Mac 浏览器）尚未开始。三类结果与待验收清单见 [VERIFICATION.md](VERIFICATION.md)。
-
-第一次真机验收顺序：`doctor` → `setup --writable`（ext4 上传盘）→ Mac/iPad 登录 SMB 读写测试文件 → `gateway-init` → 设备信任证书、Family Dashboard 导入配对 → 上传/下载比对 → pause / resume → 重启后检查。
-只有上述成功后，才把相应硬件/文件系统标为实测通过。APFS 不包含写入验收。
+代码检查（Python 109 项自动测试、构建、多轮审查）和模拟传输检查已经通过；截至 2026-10-29，omarchy-nas 已在一台真实的 Omarchy 电脑上稳定运行两周。[VERIFICATION.md](VERIFICATION.md) 是之前的记录，把代码、模拟和真机三类结果分开写；其中的真机验收清单还没有逐项勾选。
 
 ### 源码与复现
 
