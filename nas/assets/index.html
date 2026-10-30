@@ -2,20 +2,70 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Omarchy NAS · 存储总览</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
 <body>
-<div class="shell">
-  <aside class="sidebar"><a class="brand" href="/" aria-label="Omarchy NAS 首页"><span class="brand-mark">n.</span><span>omarchy<span class="brand-sub">NAS / LOCAL STORAGE</span></span></a><div class="nav-current">▦ <span>存储总览</span></div><div class="side-note"><span class="status-dot"></span> 在你的电脑上运行<p>文件通过家庭网络共享。</p><span id="version">v0.3.0</span></div></aside>
-  <main>
-    <header><div><div class="eyebrow">YOUR HOME, CONNECTED</div><h1>存储总览<span class="title-dot">.</span></h1><p class="subtitle" id="host">正在读取本机状态…</p></div><button id="refresh" class="button outline">刷新状态 <span aria-hidden="true">↻</span></button></header>
-    <div id="demo-banner" class="notice" hidden>演示模式 · 页面中的设备、容量和连接地址均为示例，不代表你的机器已接通。</div>
-    <div id="errors" role="status"></div>
-    <div id="gateway" class="notice" hidden></div>
-    <section class="summary" aria-label="存储概览"><div><span class="label">在线共享</span><strong id="count">—</strong><small id="service-state">读取中</small></div><div><span class="label">已登记容量</span><strong id="capacity">—</strong><small>卷容量总和，不代表剩余空间</small></div><div><span class="label">访问方式</span><strong class="protocol">SMB 3</strong><small>密码登录 · 连接加密</small></div></section>
-    <section class="section"><div class="section-head"><div><h2>共享空间</h2><p>查看连接地址，或管理已登记的磁盘卷。</p></div><span class="pill neutral">家庭网络</span></div><div id="shares" class="shares"></div></section>
-    <section class="section"><div class="section-head"><div><h2>已发现的磁盘</h2><p>自动识别设备；首次共享时选择要接入的卷。</p></div><button class="text-button" id="doctor">查看诊断命令 ↗</button></div><div id="devices" class="devices"></div></section>
-    <section class="connect"><span class="connect-icon" aria-hidden="true">↗</span><div><h2>在 Mac、iPad 或 Windows 上连接</h2><p>Mac：Finder → 前往 → 连接服务器。iPad：文件 → ⋯ → 连接服务器。输入上面的 SMB 地址，选择“注册用户”，使用 NAS 账号和密码登录。</p><p class="muted">Windows 在文件资源管理器输入 \\主机IP\共享名。管理页面只在这台电脑上打开。</p></div></section>
-    <footer><span>OMARCHY NAS <span class="muted">/ 独立社区扩展</span></span><span id="updated">等待首次读取</span></footer>
-  </main>
-</div>
-<dialog id="command-dialog"><form method="dialog"><button class="close" aria-label="关闭">×</button></form><span class="eyebrow">在主机终端执行</span><h2 id="dialog-title"></h2><p id="dialog-text"></p><textarea id="command" readonly rows="3" aria-label="操作命令"></textarea><button id="copy-command" class="button">复制命令</button><p class="dialog-note">磁盘和服务操作在终端确认，状态页本身不申请管理员权限。</p></dialog>
+<main class="page">
+  <header class="title-row">
+    <div class="title-block">
+      <nav class="crumbs" aria-label="位置"><a class="product" href="/"><svg class="mark" viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2.5" width="16" height="4.5" rx="1.2" fill="currentColor"/><rect x="2.75" y="9.25" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2.75" y="14.75" width="14.5" height="3" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14.6" cy="4.75" r="1" fill="#fff"/></svg>Omarchy NAS</a><span class="sep" aria-hidden="true">/</span><span id="host">本机</span></nav>
+      <div class="title-line"><h1>存储总览</h1><span id="overall" class="pill neutral">读取中</span></div>
+      <p id="finding" class="finding">正在读取本机状态…</p>
+    </div>
+    <div class="title-actions">
+      <span id="updated" class="stamp">等待首次读取</span>
+      <button id="refresh" class="button secondary" type="button">刷新</button>
+      <button id="primary" class="button primary" type="button" hidden></button>
+    </div>
+  </header>
+
+  <p id="demo-banner" class="notice" hidden>演示模式：页面上的设备、容量和地址都是示例数据，不代表这台电脑已经接通。</p>
+  <div id="errors" role="status"></div>
+
+  <!-- One card for the shares and how to reach them, then the disks. Inside the
+       shares card, 1050 = 667 + 24 + 359 at 1440: the rows take two thirds. -->
+  <section class="panel" aria-labelledby="shares-title">
+    <div class="panel-head">
+      <div><h2 id="shares-title">共享</h2><p id="shares-sub" class="panel-sub"><span class="placeholder w12"></span></p></div>
+      <p class="answer"><span id="online-count" class="figure"><span class="placeholder w3"></span></span><span id="online-unit" class="unit"></span></p>
+    </div>
+    <div class="split">
+      <div id="shares" class="rows"><div class="share-row loading"><div><span class="placeholder w8"></span><span class="placeholder w16 sub"></span></div><span class="placeholder w14"></span></div></div>
+      <div class="connect" role="group" aria-labelledby="connect-title">
+        <h3 id="connect-title">在其他设备上连接</h3>
+        <dl class="facts">
+          <div><dt>账号</dt><dd id="account"><span class="placeholder w6"></span></dd></div>
+          <div><dt>密码</dt><dd>设置时的 NAS 密码<button id="passwd" class="text-button" type="button">修改</button></dd></div>
+          <div><dt>家庭网络</dt><dd id="network" class="num"><span class="placeholder w10"></span></dd></div>
+        </dl>
+        <ul class="steps">
+          <li><strong>Mac</strong><span>Finder → 前往 → 连接服务器</span></li>
+          <li><strong>iPad</strong><span>文件 → ⋯ → 连接服务器 → 注册用户</span></li>
+          <li><strong>Windows</strong><span>地址栏输入 <code id="windows-path">\\主机IP\共享名</code></span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="disks-title">
+    <div class="panel-head">
+      <div><h2 id="disks-title">磁盘</h2><p id="disks-sub" class="panel-sub"><span class="placeholder w10"></span></p></div>
+      <button id="doctor" class="text-button" type="button">诊断命令</button>
+    </div>
+    <table class="table">
+      <thead><tr><th scope="col">卷</th><th scope="col">文件系统</th><th scope="col">接口</th><th scope="col" class="num">容量</th><th scope="col" class="state-col"><span class="visually-hidden">状态</span></th></tr></thead>
+      <tbody id="disks"><tr class="loading"><td><span class="placeholder w10"></span></td><td><span class="placeholder w4"></span></td><td><span class="placeholder w3"></span></td><td class="num"><span class="placeholder w5"></span></td><td></td></tr></tbody>
+    </table>
+  </section>
+
+  <footer class="foot"><span>Omarchy NAS <span id="version">v0.3.0</span></span><span>独立社区工具，与 Omarchy 官方无关。管理页只在这台电脑上打开。</span></footer>
+</main>
+
+<dialog id="command-dialog" aria-labelledby="dialog-title">
+  <h2 id="dialog-title"></h2>
+  <p id="dialog-text"></p>
+  <label class="field-label" for="command">在这台电脑的终端里运行</label>
+  <textarea id="command" readonly rows="3"></textarea>
+  <div class="dialog-actions"><form method="dialog"><button class="button secondary" type="submit">关闭</button></form><button id="copy-command" class="button primary" type="button">复制命令</button></div>
+  <p class="dialog-note">磁盘和服务操作在终端里确认，状态页本身不申请管理员权限。</p>
+</dialog>
 <div id="toast" role="status" hidden></div>
-</body></html>
+</body>
+</html>

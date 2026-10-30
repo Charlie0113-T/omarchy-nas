@@ -584,7 +584,10 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(status,200); self.assertTrue(len(data)>100)
             self.assertIn("frame-ancestors 'none'",headers["Content-Security-Policy"])
         self.assertIn(f'<span id="version">v{c.VERSION}</span>'.encode(),self.request("/")[2])
-        self.assertIn("ca_days_left",self.request("/app.js")[2].decode())
+        # The public status page says nothing about Family Dashboard or its gateway.
+        page=self.request("/")[2].decode()+self.request("/app.js")[2].decode()
+        for word in ("Family Dashboard","gateway-renew","gateway-init"):
+            self.assertNotIn(word,page)
 
     def test_untrusted_host_is_denied(self):
         self.assertEqual(self.request("/api/status",headers={"Host":"evil.example"})[0],403)
